@@ -1,8 +1,11 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="MusicOverdose Audio Metadata Editor Banner" width="800"/>
+  <img src="assets/logo.png" alt="OverdoseAudio Bot Logo" width="180"/>
+  <br/>
+  <img src="assets/banner.svg" alt="OverdoseAudio Banner" width="750"/>
 </p>
 
-# MusicOverdose Audio Metadata Editor Bot
+# OverdoseAudio (@MusicOverdose)
+### Production-Ready Telegram Audio Metadata Editor Bot
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
 [![aiogram 3.31+](https://img.shields.io/badge/aiogram-3.31+-2BA0D8.svg)](https://docs.aiogram.dev/)
