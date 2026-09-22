@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 240" width="800" height="240">
+  <defs>
+    <linearGradient id="magentaGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff2a85"/>
+      <stop offset="100%" stop-color="#ff0055"/>
+    </linearGradient>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0e1015"/>
+      <stop offset="100%" stop-color="#050608"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="240" rx="16" fill="url(#bgGrad)" stroke="#20242e" stroke-width="2"/>
+
+  <!-- Waveform & Equalizer Bars -->
+  <g transform="translate(60, 50)">
+    <!-- Audio Waveform Graphic -->
+    <rect x="0" y="45" width="8" height="50" rx="4" fill="#ff2a85" opacity="0.6"/>
+    <rect x="16" y="25" width="8" height="90" rx="4" fill="#ff2a85" opacity="0.8"/>
+    <rect x="32" y="10" width="8" height="120" rx="4" fill="url(#magentaGrad)" filter="url(#glow)"/>
+    <rect x="48" y="30" width="8" height="80" rx="4" fill="#ff2a85" opacity="0.9"/>
+    <rect x="64" y="50" width="8" height="40" rx="4" fill="#ff2a85" opacity="0.7"/>
+    <rect x="80" y="20" width="8" height="100" rx="4" fill="url(#magentaGrad)"/>
+    <rect x="96" y="40" width="8" height="60" rx="4" fill="#ff2a85" opacity="0.8"/>
+    <rect x="112" y="60" width="8" height="20" rx="4" fill="#ff2a85" opacity="0.5"/>
+  </g>
+
+  <!-- Modern Music Tag Icon -->
+  <g transform="translate(210, 60)">
+    <!-- Tag Shape -->
+    <path d="M 0 35 L 35 0 L 75 0 C 80 0 85 5 85 10 L 85 50 C 85 55 80 60 75 60 L 35 60 Z" 
+          fill="none" stroke="url(#magentaGrad)" stroke-width="4" stroke-linejoin="round"/>
+    <circle cx="65" cy="20" r="5" fill="#ff2a85"/>
+    <path d="M 35 25 L 35 45 M 35 30 C 45 25 50 35 45 40" 
+          fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <!-- Typography -->
+  <text x="320" y="105" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" 
+        font-size="44" font-weight="800" fill="#ffffff" letter-spacing="0.5">
+    Music<tspan fill="url(#magentaGrad)">Overdose</tspan>
+  </text>
+  <text x="322" y="142" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" 
+        font-size="16" font-weight="600" fill="#a0a6b5" letter-spacing="1.5">
+    TELEGRAM AUDIO METADATA EDITOR
+  </text>
+  
+  <!-- Telegram Identity Badge -->
+  <g transform="translate(322, 160)">
+    <rect width="145" height="26" rx="6" fill="#181b22" stroke="#2c3240" stroke-width="1"/>
+    <text x="12" y="18" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" 
+          font-size="13" font-weight="600" fill="#ff2a85">
+      @MusicOverdose
+    </text>
+  </g>
+</svg>
