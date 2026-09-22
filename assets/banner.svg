@@ -46,19 +46,19 @@
   <!-- Typography -->
   <text x="320" y="105" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" 
         font-size="44" font-weight="800" fill="#ffffff" letter-spacing="0.5">
-    Music<tspan fill="url(#magentaGrad)">Overdose</tspan>
+    Tag<tspan fill="url(#magentaGrad)">Forge</tspan>
   </text>
   <text x="322" y="142" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" 
         font-size="16" font-weight="600" fill="#a0a6b5" letter-spacing="1.5">
     TELEGRAM AUDIO METADATA EDITOR
   </text>
   
-  <!-- Telegram Identity Badge -->
+  <!-- GitHub / Creator Badge -->
   <g transform="translate(322, 160)">
-    <rect width="145" height="26" rx="6" fill="#181b22" stroke="#2c3240" stroke-width="1"/>
+    <rect width="180" height="26" rx="6" fill="#181b22" stroke="#2c3240" stroke-width="1"/>
     <text x="12" y="18" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" 
           font-size="13" font-weight="600" fill="#ff2a85">
-      @MusicOverdose
+      github: @MusicOverdose
     </text>
   </g>
 </svg>

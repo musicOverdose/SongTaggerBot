@@ -1,17 +1,18 @@
 <p align="center">
-  <img src="assets/logo.png" alt="OverdoseAudio Bot Logo" width="180"/>
-  <br/>
-  <img src="assets/banner.svg" alt="OverdoseAudio Banner" width="750"/>
+  <img src="assets/logo.png" alt="TagForge Bot Logo" width="220"/>
+  <br/><br/>
+  <img src="assets/banner.svg" alt="TagForge Banner" width="750"/>
 </p>
 
-# OverdoseAudio (@MusicOverdose)
+# TagForge
 ### Production-Ready Telegram Audio Metadata Editor Bot
+*Created by [@MusicOverdose](https://github.com/musicOverdose)*
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
 [![aiogram 3.31+](https://img.shields.io/badge/aiogram-3.31+-2BA0D8.svg)](https://docs.aiogram.dev/)
 [![Docker Compose](https://img.shields.io/badge/docker-compose-2496ED.svg)](https://docs.docker.com/compose/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Channel](https://img.shields.io/badge/Telegram-@MusicOverdose-ff2a85.svg)](https://t.me/MusicOverdose)
+[![GitHub](https://img.shields.io/badge/GitHub-@MusicOverdose-ff2a85.svg)](https://github.com/musicOverdose)
 
 Production-ready Telegram bot for inspecting and interactively editing audio file metadata, replacing or extracting album artwork, updating lyrics, trimming audio, sanitizing filenames, and managing file tags.
 
