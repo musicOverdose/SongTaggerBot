@@ -1,8 +1,3 @@
-<p align="center">
-  <img src="assets/logo.png" alt="TagForge Bot Logo" width="220"/>
-  <br/><br/>
-  <img src="assets/banner.svg" alt="TagForge Banner" width="750"/>
-</p>
 
 # SongTaggerBot
 ### Production-Ready Telegram Audio Metadata Editor Bot
