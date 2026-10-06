@@ -16,12 +16,15 @@ from app.bot.keyboards.admin_menu import (
     get_admin_broadcast_running_keyboard,
     get_admin_channels_keyboard,
     get_admin_dashboard_keyboard,
+    get_admin_settings_keyboard,
     get_admin_whitelist_keyboard,
+    get_file_size_preset_keyboard,
 )
 from app.bot.permissions import AdminCapability, has_admin_capability
 from app.bot.states.admin_states import AdminStates
 from app.config import Settings, reload_settings
 from app.database.repository import DatabaseRepository
+from app.services.api_mode_manager import ApiModeManager
 from app.services.broadcast_service import BroadcastService
 from app.services.job_manager import JobManager
 from app.services.uptime import get_uptime_formatted
@@ -61,10 +64,12 @@ async def render_admin_dashboard(
     temp_disk_mb = job_manager.get_temp_disk_usage_mb()
     uptime_str = get_uptime_formatted()
     maint_status = "🔴 <b>ACTIVE</b>" if is_maint else "🟢 <b>Normal</b>"
+    api_mode_badge = "🖥️ <b>Local Server</b>" if settings.is_local_mode else "☁️ <b>Cloud Mode</b>"
 
     text = (
         "🎛 <b>SongTaggerBot Admin Dashboard</b>\n\n"
         f"• Status: {maint_status} | Uptime: <code>{uptime_str}</code>\n"
+        f"• API Mode: {api_mode_badge} (<code>{settings.effective_api_base_url}</code>)\n"
         f"• Active Users: <b>{stats.unique_users}</b>\n"
         f"• Channels: <b>{len(channels)} active</b>\n"
         f"• Access: <b>{len(whitelist)} whitelisted</b> | <b>{len(banned)} banned</b>\n"
@@ -72,6 +77,28 @@ async def render_admin_dashboard(
         f"• Total Processed: <b>{stats.files_processed} files</b> ({stats.total_processed_mb} MB)"
     )
     kb = get_admin_dashboard_keyboard(maintenance_mode=is_maint)
+    return text, kb
+
+
+def render_admin_settings(settings: Settings) -> tuple[str, any]:
+    """Builds the Bot Configuration & API settings screen text and keyboard."""
+    mode_badge = "🖥️ <b>Local Server (Centralized)</b>" if settings.is_local_mode else "☁️ <b>Cloud (api.telegram.org)</b>"
+    tech_badge = "🟢 Enabled" if settings.show_technical_info else "🔴 Disabled"
+    cover_badge = "🟢 Enabled" if settings.send_cover_separately else "🔴 Disabled"
+
+    text = (
+        "⚙️ <b>Bot Configuration & API Settings</b>\n\n"
+        f"• <b>API Mode:</b> {mode_badge}\n"
+        f"• <b>Base Endpoint:</b> <code>{settings.effective_api_base_url}</code>\n"
+        f"• <b>Max File Input:</b> <b>{settings.max_input_mb} MB</b>\n"
+        f"• <b>Max File Output:</b> <b>{settings.max_output_mb} MB</b>\n"
+        f"• <b>Rate Limit:</b> <b>{settings.rate_limit_uploads_per_minute} uploads/min</b>\n"
+        f"• <b>Concurrency:</b> <b>{settings.max_user_concurrent_jobs}/user</b> | <b>{settings.max_global_concurrent_jobs} global</b>\n"
+        f"• <b>Technical Specs in Preview:</b> {tech_badge}\n"
+        f"• <b>Send Cover Separately:</b> {cover_badge}\n\n"
+        "<i>Use buttons below to switch API modes, update limits, or toggle UX options in real time.</i>"
+    )
+    kb = get_admin_settings_keyboard(settings)
     return text, kb
 
 
@@ -938,3 +965,303 @@ async def callback_adm_bcast_confirm(
     )
     await status_msg.edit_text(summary, reply_markup=get_admin_back_keyboard(), parse_mode="HTML")
     await callback.answer()
+
+
+# --- Interactive Bot Configuration & Settings Panel ---
+
+@router.callback_query(F.data == "adm_settings")
+async def callback_adm_settings(
+    callback: CallbackQuery,
+    settings: Settings,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+    text, kb = render_admin_settings(settings)
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm_set_mode:"))
+async def callback_adm_set_mode(
+    callback: CallbackQuery,
+    settings: Settings,
+    repository: DatabaseRepository,
+    api_mode_manager: Optional[ApiModeManager] = None,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+
+    target_mode = callback.data.split(":", 1)[1]
+    if api_mode_manager is None:
+        api_mode_manager = ApiModeManager(callback.bot, settings, repository)
+
+    ok, msg = await api_mode_manager.switch_mode(target_mode, admin_id=callback.from_user.id)
+    await callback.answer(msg, show_alert=True)
+    if ok and callback.message:
+        text, kb = render_admin_settings(settings)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "adm_set_local_url")
+async def callback_adm_set_local_url(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+    await state.set_state(AdminStates.waiting_for_local_url)
+    text = (
+        "✏️ <b>Enter Local Bot API Endpoint URL</b>\n\n"
+        f"Current: <code>{settings.effective_api_base_url}</code>\n"
+        "Default internal Docker endpoint: <code>http://telegram-bot-api:8081</code>\n\n"
+        "Send the new HTTP/HTTPS URL below (or /cancel):"
+    )
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_for_local_url)
+async def process_admin_local_url_input(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    repository: DatabaseRepository,
+    api_mode_manager: Optional[ApiModeManager] = None,
+) -> None:
+    if not is_admin_check(message, settings):
+        await state.clear()
+        return
+
+    url_text = (message.text or "").strip()
+    if url_text.lower() in ("/cancel", "cancel"):
+        await state.clear()
+        text, kb = render_admin_settings(settings)
+        await message.answer("Editing cancelled.", reply_markup=kb, parse_mode="HTML")
+        return
+
+    if api_mode_manager is None:
+        api_mode_manager = ApiModeManager(message.bot, settings, repository)
+
+    ok, status_msg = await api_mode_manager.update_local_url(url_text, admin_id=message.from_user.id)
+    await state.clear()
+    text, kb = render_admin_settings(settings)
+    await message.answer(f"{status_msg}\n\n" + text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "adm_set_input_mb")
+async def callback_adm_set_input_mb(
+    callback: CallbackQuery,
+    settings: Settings,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+    kb = get_file_size_preset_keyboard("input", is_local=settings.is_local_mode)
+    text = (
+        f"📦 <b>Select Maximum Input File Size</b>\n\n"
+        f"Current: <b>{settings.max_input_mb} MB</b>\n"
+        f"Mode: {'🖥️ Local Server (up to 2000 MB)' if settings.is_local_mode else '☁️ Cloud Mode (max 20 MB download)'}"
+    )
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "adm_set_output_mb")
+async def callback_adm_set_output_mb(
+    callback: CallbackQuery,
+    settings: Settings,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+    kb = get_file_size_preset_keyboard("output", is_local=settings.is_local_mode)
+    text = (
+        f"📤 <b>Select Maximum Output File Size</b>\n\n"
+        f"Current: <b>{settings.max_output_mb} MB</b>\n"
+        f"Mode: {'🖥️ Local Server (up to 2000 MB)' if settings.is_local_mode else '☁️ Cloud Mode (max 50 MB upload)'}"
+    )
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm_set_size:"))
+async def callback_adm_set_size_preset(
+    callback: CallbackQuery,
+    settings: Settings,
+    repository: DatabaseRepository,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    setting_type = parts[1]
+    size_mb = int(parts[2])
+
+    if setting_type == "input":
+        settings.max_input_mb = size_mb
+        await repository.set_system_setting("max_input_mb", str(size_mb))
+    else:
+        settings.max_output_mb = size_mb
+        await repository.set_system_setting("max_output_mb", str(size_mb))
+
+    await repository.log_audit_action(
+        admin_id=callback.from_user.id,
+        action="update_setting",
+        details=f"Changed max_{setting_type}_mb to {size_mb} MB",
+    )
+    await callback.answer(f"Updated Max {setting_type.title()} to {size_mb} MB!", show_alert=True)
+    text, kb = render_admin_settings(settings)
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("adm_set_size_custom:"))
+async def callback_adm_set_size_custom(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+    setting_type = callback.data.split(":", 1)[1]
+    if setting_type == "input":
+        await state.set_state(AdminStates.waiting_for_custom_input_mb)
+    else:
+        await state.set_state(AdminStates.waiting_for_custom_output_mb)
+
+    text = f"✏️ <b>Enter Custom Max {setting_type.title()} Size in MB</b> (1 - 2000):"
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_for_custom_input_mb)
+async def process_custom_input_mb(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    repository: DatabaseRepository,
+) -> None:
+    if not is_admin_check(message, settings):
+        await state.clear()
+        return
+    text_val = (message.text or "").strip()
+    if text_val.lower() in ("/cancel", "cancel"):
+        await state.clear()
+        t, kb = render_admin_settings(settings)
+        await message.answer("Cancelled.", reply_markup=kb, parse_mode="HTML")
+        return
+    if not text_val.isdigit() or not (1 <= int(text_val) <= 2000):
+        await message.answer("⚠️ Please enter a valid integer between 1 and 2000.")
+        return
+
+    val = int(text_val)
+    settings.max_input_mb = val
+    await repository.set_system_setting("max_input_mb", str(val))
+    await repository.log_audit_action(
+        admin_id=message.from_user.id,
+        action="update_setting",
+        details=f"Changed max_input_mb to {val} MB",
+    )
+    await state.clear()
+    t, kb = render_admin_settings(settings)
+    await message.answer(f"✅ Max Input Size set to {val} MB!\n\n" + t, reply_markup=kb, parse_mode="HTML")
+
+
+@router.message(AdminStates.waiting_for_custom_output_mb)
+async def process_custom_output_mb(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    repository: DatabaseRepository,
+) -> None:
+    if not is_admin_check(message, settings):
+        await state.clear()
+        return
+    text_val = (message.text or "").strip()
+    if text_val.lower() in ("/cancel", "cancel"):
+        await state.clear()
+        t, kb = render_admin_settings(settings)
+        await message.answer("Cancelled.", reply_markup=kb, parse_mode="HTML")
+        return
+    if not text_val.isdigit() or not (1 <= int(text_val) <= 2000):
+        await message.answer("⚠️ Please enter a valid integer between 1 and 2000.")
+        return
+
+    val = int(text_val)
+    settings.max_output_mb = val
+    await repository.set_system_setting("max_output_mb", str(val))
+    await repository.log_audit_action(
+        admin_id=message.from_user.id,
+        action="update_setting",
+        details=f"Changed max_output_mb to {val} MB",
+    )
+    await state.clear()
+    t, kb = render_admin_settings(settings)
+    await message.answer(f"✅ Max Output Size set to {val} MB!\n\n" + t, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("adm_set_toggle:"))
+async def callback_adm_set_toggle(
+    callback: CallbackQuery,
+    settings: Settings,
+    repository: DatabaseRepository,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+    toggle_type = callback.data.split(":", 1)[1]
+    if toggle_type == "tech":
+        settings.show_technical_info = not settings.show_technical_info
+        new_val = settings.show_technical_info
+        await repository.set_system_setting("show_technical_info", "1" if new_val else "0")
+        label = "Technical Specs in Preview"
+    elif toggle_type == "cover":
+        settings.send_cover_separately = not settings.send_cover_separately
+        new_val = settings.send_cover_separately
+        await repository.set_system_setting("send_cover_separately", "1" if new_val else "0")
+        label = "Send Cover Separately"
+    else:
+        await callback.answer()
+        return
+
+    await repository.log_audit_action(
+        admin_id=callback.from_user.id,
+        action="update_setting",
+        details=f"Toggled {label} -> {'ON' if new_val else 'OFF'}",
+    )
+    await callback.answer(f"{label} is now {'ON' if new_val else 'OFF'}!")
+    t, kb = render_admin_settings(settings)
+    if callback.message:
+        await callback.message.edit_text(t, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "adm_set_reset")
+async def callback_adm_set_reset(
+    callback: CallbackQuery,
+    settings: Settings,
+    repository: DatabaseRepository,
+    api_mode_manager: Optional[ApiModeManager] = None,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+
+    if api_mode_manager is None:
+        api_mode_manager = ApiModeManager(callback.bot, settings, repository)
+
+    ok, msg = await api_mode_manager.reset_to_env_defaults(admin_id=callback.from_user.id)
+    await callback.answer(msg, show_alert=True)
+    t, kb = render_admin_settings(settings)
+    if callback.message:
+        await callback.message.edit_text(t, reply_markup=kb, parse_mode="HTML")

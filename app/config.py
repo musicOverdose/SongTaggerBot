@@ -71,9 +71,34 @@ class Settings(BaseSettings):
     send_cover_separately: bool = Field(default=False, description="Send extracted cover as a separate image on finish")
     default_filename_format: str = Field(default="{track:02} - {title}", description="Default naming template")
 
-    # Telegram API URLs (overridable for Local Bot API Server)
-    telegram_api_base: str = Field(default="https://api.telegram.org", description="Base URL for Bot API")
-    telegram_file_base: str = Field(default="https://api.telegram.org/file", description="Base URL for file downloads")
+    # Telegram Bot API Mode & Endpoint (Dual Mode: Cloud vs Centralized Local)
+    telegram_api_mode: str = Field(
+        default="cloud",
+        description="API server mode: 'cloud' (official api.telegram.org) or 'local' (centralized Local Bot API)",
+    )
+    telegram_api_base_url: str = Field(
+        default="https://api.telegram.org",
+        description="Telegram Bot API base URL (used when in 'local' mode, or official Telegram URL)",
+    )
+
+    @property
+    def is_local_mode(self) -> bool:
+        """Explicit mode resolution: 'local' is authoritative."""
+        return self.telegram_api_mode.lower().strip() == "local"
+
+    @property
+    def effective_api_base_url(self) -> str:
+        """
+        Resolves the active API base URL.
+        mode = cloud -> https://api.telegram.org
+        mode = local -> telegram_api_base_url (defaulting to http://telegram-bot-api:8081 if pointing to official URL or empty)
+        """
+        if self.is_local_mode:
+            url = self.telegram_api_base_url.strip().rstrip("/")
+            if not url or url == "https://api.telegram.org":
+                return "http://telegram-bot-api:8081"
+            return url
+        return "https://api.telegram.org"
 
     @field_validator("admin_ids", mode="before")
     @classmethod

@@ -74,14 +74,15 @@ def test_abandoned_jobs_garbage_collection(tmp_path: Path):
 def test_custom_api_server_config():
     # Verify local bot API URL configuration
     s = Settings(
-        telegram_api_base="http://localhost:8081",
-        telegram_file_base="http://localhost:8081/file",
+        telegram_api_mode="local",
+        telegram_api_base_url="http://localhost:8081",
         max_input_mb=2000,
         max_output_mb=2000,
     )
     assert s.max_input_bytes == 2000 * 1024 * 1024
-    assert s.telegram_api_base == "http://localhost:8081"
-    assert s.telegram_file_base == "http://localhost:8081/file"
+    assert s.telegram_api_mode == "local"
+    assert s.is_local_mode is True
+    assert s.effective_api_base_url == "http://localhost:8081"
 
 
 @pytest.mark.asyncio

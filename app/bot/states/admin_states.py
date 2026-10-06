@@ -9,3 +9,6 @@ class AdminStates(StatesGroup):
     waiting_for_ban_input = State()
     waiting_for_broadcast_content = State()
     waiting_for_broadcast_confirm = State()
+    waiting_for_local_url = State()
+    waiting_for_custom_input_mb = State()
+    waiting_for_custom_output_mb = State()

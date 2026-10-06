@@ -180,6 +180,87 @@ def cmd_cleanup(settings):
     print(f"Cleanup completed. Removed {count} expired and {orphaned} orphaned job directories.")
 
 
+async def cmd_api_mode(repo: DatabaseRepository, settings, action: str, url: str = None):
+    db_mode = await repo.get_system_setting("telegram_api_mode", "")
+    db_url = await repo.get_system_setting("telegram_api_base_url", "")
+    current_mode = db_mode or settings.telegram_api_mode
+    current_url = db_url or settings.effective_api_base_url
+
+    if action == "status":
+        print("=" * 50)
+        print("Telegram Bot API Mode & Connectivity:")
+        print(f"Active Mode:          {current_mode.upper()}")
+        print(f"Base Endpoint:        {current_url}")
+        print(f"Env Mode:             {settings.telegram_api_mode}")
+        print(f"DB Override Mode:     {db_mode or 'None (using env)'}")
+        print("=" * 50)
+        return
+
+    if action == "cloud":
+        await repo.set_system_setting("telegram_api_mode", "cloud")
+        cur_in = int(await repo.get_system_setting("max_input_mb", str(settings.max_input_mb)) or settings.max_input_mb)
+        if cur_in > 20:
+            await repo.set_system_setting("max_input_mb", "20")
+        cur_out = int(await repo.get_system_setting("max_output_mb", str(settings.max_output_mb)) or settings.max_output_mb)
+        if cur_out > 50:
+            await repo.set_system_setting("max_output_mb", "50")
+        await repo.log_audit_action(
+            admin_id=0,
+            action="switch_api_mode",
+            details="CLI switched to Cloud Mode (https://api.telegram.org)",
+        )
+        print("Successfully switched to CLOUD MODE (https://api.telegram.org).")
+        return
+
+    if action == "local":
+        target_url = (url or db_url or settings.telegram_api_base_url).strip().rstrip("/")
+        if not target_url or target_url == "https://api.telegram.org":
+            target_url = "http://telegram-bot-api:8081"
+        await repo.set_system_setting("telegram_api_mode", "local")
+        await repo.set_system_setting("telegram_api_base_url", target_url)
+        cur_in = int(await repo.get_system_setting("max_input_mb", str(settings.max_input_mb)) or settings.max_input_mb)
+        if cur_in <= 20:
+            await repo.set_system_setting("max_input_mb", "2000")
+        cur_out = int(await repo.get_system_setting("max_output_mb", str(settings.max_output_mb)) or settings.max_output_mb)
+        if cur_out <= 50:
+            await repo.set_system_setting("max_output_mb", "2000")
+        await repo.log_audit_action(
+            admin_id=0,
+            action="switch_api_mode",
+            details=f"CLI switched to Local Mode ({target_url})",
+        )
+        print(f"Successfully switched to LOCAL MODE ({target_url}).")
+        return
+
+
+async def cmd_settings_list(repo: DatabaseRepository, settings):
+    db_mode = await repo.get_system_setting("telegram_api_mode", "")
+    db_url = await repo.get_system_setting("telegram_api_base_url", "")
+    db_in = await repo.get_system_setting("max_input_mb", "")
+    db_out = await repo.get_system_setting("max_output_mb", "")
+    db_tech = await repo.get_system_setting("show_technical_info", "")
+    db_cover = await repo.get_system_setting("send_cover_separately", "")
+
+    eff_mode = db_mode or settings.telegram_api_mode
+    eff_url = db_url or (settings.telegram_api_base_url if eff_mode == "local" else "https://api.telegram.org")
+    eff_in = db_in or str(settings.max_input_mb)
+    eff_out = db_out or str(settings.max_output_mb)
+    eff_tech = db_tech if db_tech != "" else str(settings.show_technical_info)
+    eff_cover = db_cover if db_cover != "" else str(settings.send_cover_separately)
+
+    print("=" * 60)
+    print("SongTaggerBot Active Settings:")
+    print("-" * 60)
+    print(f"API Server Mode:       {eff_mode.upper()} ({eff_url})")
+    print(f"Max Input File Size:   {eff_in} MB")
+    print(f"Max Output File Size:  {eff_out} MB")
+    print(f"Rate Limit:            {settings.rate_limit_uploads_per_minute} uploads/min")
+    print(f"Concurrency:           {settings.max_user_concurrent_jobs}/user | {settings.max_global_concurrent_jobs} global")
+    print(f"Technical Specs:       {'ON' if eff_tech in ('1', 'True', 'true') else 'OFF'}")
+    print(f"Send Cover Separately: {'ON' if eff_cover in ('1', 'True', 'true') else 'OFF'}")
+    print("=" * 60)
+
+
 async def async_main():
     settings = get_settings()
     db = Database(settings.db_path)
@@ -231,6 +312,17 @@ async def async_main():
     maint_sub.add_parser("enable", help="Enable maintenance mode")
     maint_sub.add_parser("disable", help="Disable maintenance mode")
 
+    # api-mode subparser
+    api_parser = subparsers.add_parser("api-mode", help="Manage Telegram Bot API mode (cloud vs local)")
+    api_sub = api_parser.add_subparsers(dest="action", required=True)
+    api_sub.add_parser("status", help="Show current API server mode and URL")
+    api_sub.add_parser("cloud", help="Switch to Cloud Mode (official Telegram servers)")
+    local_p = api_sub.add_parser("local", help="Switch to Local Mode (centralized server)")
+    local_p.add_argument("url", nargs="?", default=None, help="Optional Local Bot API URL")
+
+    # settings subparser
+    subparsers.add_parser("settings", help="List all current bot settings and DB overrides")
+
     # backup subparser
     subparsers.add_parser("backup", help="Create live database backup")
 
@@ -274,6 +366,10 @@ async def async_main():
                 await cmd_ban_remove(repo, args.user_id)
         elif args.command == "maintenance":
             await cmd_maintenance(repo, args.action)
+        elif args.command == "api-mode":
+            await cmd_api_mode(repo, settings, args.action, getattr(args, "url", None))
+        elif args.command == "settings":
+            await cmd_settings_list(repo, settings)
         elif args.command == "backup":
             await cmd_backup(repo, settings)
         elif args.command == "audit":

@@ -29,6 +29,7 @@ from app.bot.middleware.must_join_middleware import MustJoinMiddleware
 from app.config import get_settings
 from app.database.connection import Database
 from app.database.repository import DatabaseRepository
+from app.services.api_mode_manager import ApiModeManager
 from app.services.broadcast_service import BroadcastService
 from app.services.job_manager import JobManager
 from app.services.must_join_service import MustJoinService
@@ -97,6 +98,26 @@ async def main():
     is_maint = await repository.is_maintenance_mode()
     job_manager.set_maintenance_mode(is_maint)
 
+    # Load database-persisted settings overrides from repository
+    db_mode = await repository.get_system_setting("telegram_api_mode", "")
+    if db_mode:
+        settings.telegram_api_mode = db_mode
+    db_base_url = await repository.get_system_setting("telegram_api_base_url", "")
+    if db_base_url:
+        settings.telegram_api_base_url = db_base_url
+    db_max_in = await repository.get_system_setting("max_input_mb", "")
+    if db_max_in and db_max_in.isdigit():
+        settings.max_input_mb = int(db_max_in)
+    db_max_out = await repository.get_system_setting("max_output_mb", "")
+    if db_max_out and db_max_out.isdigit():
+        settings.max_output_mb = int(db_max_out)
+    db_tech_info = await repository.get_system_setting("show_technical_info", "")
+    if db_tech_info:
+        settings.show_technical_info = db_tech_info in ("1", "true", "True")
+    db_send_cover = await repository.get_system_setting("send_cover_separately", "")
+    if db_send_cover:
+        settings.send_cover_separately = db_send_cover in ("1", "true", "True")
+
     queue_manager = QueueManager(max_concurrent_jobs=settings.max_concurrent_jobs)
     queue_manager.start()
 
@@ -108,14 +129,21 @@ async def main():
     )
     broadcast_service = BroadcastService(repository)
 
-    # Configure Bot instance (support Local Bot API server if configured)
+    # Configure Bot instance (support Centralized Local Bot API server if configured)
     session = None
-    if settings.telegram_api_base != "https://api.telegram.org":
-        custom_server = TelegramAPIServer(
-            base=f"{settings.telegram_api_base}/bot{{token}}/{{method}}",
-            file=f"{settings.telegram_file_base}/file/bot{{token}}/{{path}}",
+    if settings.is_local_mode:
+        # Centralized server must communicate over standard HTTP with is_local=False
+        custom_server = TelegramAPIServer.from_base(
+            settings.effective_api_base_url,
+            is_local=False,
         )
         session = AiohttpSession(api=custom_server)
+        logger.info(
+            f"Bot operating in LOCAL MODE with centralized API server: "
+            f"{settings.effective_api_base_url} (is_local=False)"
+        )
+    else:
+        logger.info("Bot operating in CLOUD MODE with official Telegram servers (https://api.telegram.org)")
 
     bot = Bot(
         token=settings.bot_token,
@@ -123,10 +151,17 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
+    api_mode_manager = ApiModeManager(
+        bot=bot,
+        settings=settings,
+        repository=repository,
+    )
+
     # Dispatcher & FSM Memory Storage
     dp = Dispatcher(storage=MemoryStorage())
 
     # Dependency injection into all handlers
+    dp["bot"] = bot
     dp["settings"] = settings
     dp["repository"] = repository
     dp["job_manager"] = job_manager
@@ -135,6 +170,7 @@ async def main():
     dp["must_join_service"] = must_join_service
     dp["rate_limiter"] = rate_limiter
     dp["broadcast_service"] = broadcast_service
+    dp["api_mode_manager"] = api_mode_manager
 
     # Attach Must-Join verification middleware to messages & callback queries
     dp.message.middleware(MustJoinMiddleware(must_join_service))

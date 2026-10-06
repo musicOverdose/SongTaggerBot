@@ -58,15 +58,22 @@ MusicOverdose checks Telegram's reported file size **before** initiating downloa
 Maximum input size: 20 MB
 ```
 
-### Local Bot API Server Support
-The download architecture is fully abstracted. When deploying with a self-hosted [Telegram Local Bot API Server](https://core.telegram.org/bots/api#using-a-local-bot-api-server), simply adjust the environment variables:
+### Centralized Local Bot API Server Support (Dual Mode)
+SongTaggerBot acts purely as an HTTP client connecting to our centralized, shared Telegram Local Bot API stack on the external Docker network `telegram-bots` at `http://telegram-bot-api:8081`.
+
+The bot container does not bundle or embed its own Local Bot API server. It communicates over standard HTTP (`is_local=False`), so it requires **no** shared filesystem and **no** Telegram API credentials (`TELEGRAM_API_ID` and `TELEGRAM_API_HASH` belong exclusively to the centralized server stack).
+
 ```dotenv
+# Cloud Mode (Default: official Telegram servers)
+TELEGRAM_API_MODE=cloud
+TELEGRAM_API_BASE_URL=https://api.telegram.org
+
+# Local Mode (Centralized shared stack on VPS)
+TELEGRAM_API_MODE=local
+TELEGRAM_API_BASE_URL=http://telegram-bot-api:8081
 MAX_INPUT_MB=2000
 MAX_OUTPUT_MB=2000
-TELEGRAM_API_BASE=http://telegram-bot-api:8081
-TELEGRAM_FILE_BASE=http://telegram-bot-api:8081/file
 ```
-No code refactoring is necessary.
 
 ---
 
@@ -123,8 +130,8 @@ cp .env.example .env
 | `SHOW_TECHNICAL_INFO` | `true` | Show bitrate, sample rate, channels in preview |
 | `SEND_COVER_SEPARATELY`| `false` | Send extracted album cover as a separate image on finish |
 | `DEFAULT_FILENAME_FORMAT`| `{track:02} - {title}` | Default template for filename generation |
-| `TELEGRAM_API_BASE` | `https://api.telegram.org` | Telegram Bot API base endpoint |
-| `TELEGRAM_FILE_BASE`| `https://api.telegram.org/file` | Telegram file download endpoint |
+| `TELEGRAM_API_MODE` | `cloud` | Bot API mode (`cloud` or `local`) |
+| `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | API base endpoint (`http://telegram-bot-api:8081` in local mode) |
 
 ---
 
@@ -213,6 +220,14 @@ docker compose run --rm bot cli maintenance status
 docker compose run --rm bot cli maintenance enable
 docker compose run --rm bot cli maintenance disable
 
+# API Server Mode: View status, switch to cloud, or switch to centralized local server
+docker compose run --rm bot cli api-mode status
+docker compose run --rm bot cli api-mode cloud
+docker compose run --rm bot cli api-mode local http://telegram-bot-api:8081
+
+# Settings: View all active configuration parameters & DB overrides
+docker compose run --rm bot cli settings
+
 # Live Online SQLite Database Backup
 docker compose run --rm bot cli backup
 
@@ -232,7 +247,13 @@ docker compose run --rm bot cli cleanup
 
 Administrators (whose user IDs are listed in `ADMIN_IDS`) have access to a full in-Telegram management suite:
 
-- `/admin` &mdash; **Interactive Operational Dashboard**: Displays real-time operational metrics including **system uptime**, **active jobs**, **temporary scratchpad disk usage**, **whitelist & ban counts**, **channel status**, and **maintenance mode**. Offers quick-action inline buttons to:
+- `/admin` &mdash; **Interactive Operational Dashboard**: Displays real-time operational metrics including **system uptime**, **API Mode** (Cloud vs Local server), **active jobs**, **temporary scratchpad disk usage**, **whitelist & ban counts**, **channel status**, and **maintenance mode**. Offers quick-action inline buttons to:
+  - ⚙️ **Bot Settings Panel**: Real-time configuration panel allowing admins to:
+    - Switch between **Cloud Mode** and **Local Server Mode** on the fly with safe transition and `getMe` connectivity verification.
+    - Update the centralized **Local Bot API endpoint URL**.
+    - Configure max input/output file sizes with quick presets or custom sizes.
+    - Toggle **Technical Specs in preview** and **Send Cover Separately**.
+    - Reset settings to `.env` defaults.
   - 🔄 **Toggle Maintenance Mode**: Temporarily pause new user jobs while allowing admin testing.
   - 💾 **Trigger Live Backup**: Execute consistent online SQLite database backups on-demand.
   - 📜 **Audit Logs Viewer**: Browse paginated administrative logs with timestamps, actions, and admin IDs.

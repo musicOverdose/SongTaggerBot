@@ -3,6 +3,7 @@
 from typing import List
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.config import Settings
 from app.database.models import BannedUser, RequiredChannel, WhitelistedUser
 
 
@@ -27,10 +28,11 @@ def get_admin_dashboard_keyboard(maintenance_mode: bool = False) -> InlineKeyboa
             InlineKeyboardButton(text="🧹 GC Cleanup", callback_data="adm_cleanup"),
         ],
         [
+            InlineKeyboardButton(text="⚙️ Settings", callback_data="adm_settings"),
             InlineKeyboardButton(text="💾 Backup DB", callback_data="adm_backup"),
-            InlineKeyboardButton(text="🔄 Reload Config", callback_data="adm_reload"),
         ],
         [
+            InlineKeyboardButton(text="🔄 Reload Config", callback_data="adm_reload"),
             InlineKeyboardButton(text="❌ Close", callback_data="adm_close"),
         ],
     ]
@@ -141,3 +143,62 @@ def get_admin_back_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="↩ Back to Admin", callback_data="adm_home")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_settings_keyboard(settings: Settings) -> InlineKeyboardMarkup:
+    """Settings menu keyboard showing API mode, limits, and UX toggles."""
+    is_local = settings.is_local_mode
+    mode_btn_text = "☁️ Switch to Cloud Mode" if is_local else "🖥️ Switch to Local Mode"
+    target_mode = "cloud" if is_local else "local"
+
+    tech_icon = "🟢" if settings.show_technical_info else "🔴"
+    cover_icon = "🟢" if settings.send_cover_separately else "🔴"
+
+    row1 = [InlineKeyboardButton(text=mode_btn_text, callback_data=f"adm_set_mode:{target_mode}")]
+    if is_local:
+        row1.append(InlineKeyboardButton(text="✏️ Edit Local URL", callback_data="adm_set_local_url"))
+
+    buttons = [
+        row1,
+        [
+            InlineKeyboardButton(text=f"📦 In: {settings.max_input_mb}MB", callback_data="adm_set_input_mb"),
+            InlineKeyboardButton(text=f"📤 Out: {settings.max_output_mb}MB", callback_data="adm_set_output_mb"),
+        ],
+        [
+            InlineKeyboardButton(text=f"{tech_icon} Technical Specs", callback_data="adm_set_toggle:tech"),
+            InlineKeyboardButton(text=f"{cover_icon} Separate Cover", callback_data="adm_set_toggle:cover"),
+        ],
+        [
+            InlineKeyboardButton(text="🔄 Reset to .env Defaults", callback_data="adm_set_reset"),
+        ],
+        [
+            InlineKeyboardButton(text="↩ Back to Admin", callback_data="adm_home"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_file_size_preset_keyboard(setting_type: str, is_local: bool) -> InlineKeyboardMarkup:
+    """Presets for max input or output file size."""
+    if is_local:
+        presets = [20, 50, 100, 500, 1000, 2000]
+    else:
+        presets = [10, 20] if setting_type == "input" else [20, 30, 50]
+
+    rows = []
+    current_row = []
+    for p in presets:
+        current_row.append(
+            InlineKeyboardButton(text=f"{p} MB", callback_data=f"adm_set_size:{setting_type}:{p}")
+        )
+        if len(current_row) == 3:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+
+    rows.append([
+        InlineKeyboardButton(text="✏️ Custom Size", callback_data=f"adm_set_size_custom:{setting_type}"),
+        InlineKeyboardButton(text="↩ Back to Settings", callback_data="adm_settings"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
