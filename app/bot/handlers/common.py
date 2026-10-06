@@ -16,7 +16,7 @@ router = Router(name="common_router")
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     welcome_text = (
-        "🎵 <b>TagForge Audio Metadata Editor</b>\n"
+        "🎵 <b>SongTaggerBot</b>\n"
         "<i>by @MusicOverdose</i>\n\n"
         "Welcome! Send any music or audio track to inspect and edit its tags.\n\n"
         "<b>Supported Formats:</b>\n"
@@ -38,7 +38,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
     help_text = (
-        "📖 <b>How to use TagForge:</b>\n\n"
+        "📖 <b>How to use SongTaggerBot:</b>\n\n"
         "1. <b>Upload:</b> Send an audio file directly into this chat.\n"
         "2. <b>Inspect:</b> The bot displays the current tags, cover, and audio specs.\n"
         "3. <b>Edit:</b> Use inline buttons to edit tags, update cover art, or edit lyrics.\n"

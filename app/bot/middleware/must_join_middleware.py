@@ -33,7 +33,24 @@ class MustJoinMiddleware(BaseMiddleware):
         if settings and settings.is_admin(user.id):
             return await handler(event, data)
 
-        # Allow /start, /help, /channels, and must_join_verify callback
+        repo = self.must_join_service.repository
+
+        # Check if user is banned
+        if await repo.is_banned(user.id):
+            if isinstance(event, Message):
+                await event.reply(
+                    "🚫 <b>Access Denied</b>\n\nYou have been banned from using this bot.",
+                    parse_mode="HTML",
+                )
+            elif isinstance(event, CallbackQuery):
+                await event.answer("🚫 You have been banned from using this bot.", show_alert=True)
+            return None
+
+        # Check if user is whitelisted (bypasses must-join requirement)
+        if await repo.is_whitelisted(user.id):
+            return await handler(event, data)
+
+        # Allow /start, /help, and must_join_verify callback
         if isinstance(event, Message) and event.text:
             cmd = event.text.split()[0].lower()
             if cmd in ("/start", "/help"):
@@ -51,7 +68,7 @@ class MustJoinMiddleware(BaseMiddleware):
             kb = get_must_join_keyboard(missing)
             text = (
                 "📢 <b>Channel Membership Required</b>\n\n"
-                "To use MusicOverdose audio metadata editor, please join our channel(s) below, "
+                "To use <b>SongTaggerBot</b>, please join our channel(s) below, "
                 "then press <b>I've joined</b>."
             )
             if isinstance(event, Message):
@@ -63,3 +80,4 @@ class MustJoinMiddleware(BaseMiddleware):
             return None
 
         return await handler(event, data)
+

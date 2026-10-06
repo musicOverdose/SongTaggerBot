@@ -42,3 +42,70 @@ async def test_must_join_evaluation(test_repo: DatabaseRepository):
     assert has_joined is False
     assert len(missing) == 1
     assert missing[0].channel_id == "@chan2"
+
+
+@pytest.mark.asyncio
+async def test_middleware_access_control(test_repo: DatabaseRepository):
+    from app.bot.middleware.must_join_middleware import MustJoinMiddleware
+    from app.config import Settings
+
+    service = MustJoinService(test_repo)
+    middleware = MustJoinMiddleware(service)
+    await test_repo.add_channel("@mustjoin", username="mustjoin")
+
+    settings = Settings(bot_token="test", admin_ids=[999])
+    mock_bot = MagicMock()
+    mock_bot.get_chat_member = AsyncMock(return_value=MagicMock(status=ChatMemberStatus.LEFT))
+
+    handler_called = False
+
+    async def dummy_handler(event, data):
+        nonlocal handler_called
+        handler_called = True
+        return "OK"
+
+    from aiogram.types import Message
+
+    # Case 1: Banned user -> blocked immediately
+    await test_repo.ban_user(user_id=666, reason="Bad actor")
+    mock_event = MagicMock(spec=Message)
+    mock_event.text = "/start_process"
+    mock_event.reply = AsyncMock()
+
+    data = {
+        "event_from_user": MagicMock(id=666, is_bot=False),
+        "bot": mock_bot,
+        "settings": settings,
+    }
+    handler_called = False
+    result = await middleware(dummy_handler, mock_event, data)
+    assert result is None
+    assert handler_called is False
+    mock_event.reply.assert_called_once()
+    assert "banned" in mock_event.reply.call_args[0][0].lower()
+
+    # Case 2: Whitelisted user -> bypasses must-join check
+    await test_repo.add_to_whitelist(user_id=777, reason="VIP")
+    data["event_from_user"] = MagicMock(id=777, is_bot=False)
+    handler_called = False
+    result = await middleware(dummy_handler, mock_event, data)
+    assert result == "OK"
+    assert handler_called is True
+
+    # Case 3: Admin -> bypasses must-join check
+    data["event_from_user"] = MagicMock(id=999, is_bot=False)
+    handler_called = False
+    result = await middleware(dummy_handler, mock_event, data)
+    assert result == "OK"
+    assert handler_called is True
+
+    # Case 4: Normal user not joined -> prompt must-join
+    mock_event.reply.reset_mock()
+    data["event_from_user"] = MagicMock(id=888, is_bot=False)
+    handler_called = False
+    result = await middleware(dummy_handler, mock_event, data)
+    assert result is None
+    assert handler_called is False
+    mock_event.reply.assert_called_once()
+    assert "membership required" in mock_event.reply.call_args[0][0].lower()
+

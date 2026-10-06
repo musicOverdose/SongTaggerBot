@@ -49,11 +49,19 @@ class Settings(BaseSettings):
 
     # Concurrency and Job TTL
     max_concurrent_jobs: int = Field(default=2, ge=1, le=64, description="Max concurrent processing workers")
+    max_user_concurrent_jobs: int = Field(default=1, ge=1, le=10, description="Max concurrent jobs per user")
+    max_global_concurrent_jobs: int = Field(default=10, ge=1, le=128, description="Global maximum concurrent jobs")
     job_ttl_minutes: int = Field(default=30, ge=1, le=1440, description="TTL in minutes for temporary jobs")
 
-    # Directory Paths
+    # Abuse protection and timeouts
+    rate_limit_uploads_per_minute: int = Field(default=5, ge=1, le=120, description="Max uploads per minute per user")
+    ffmpeg_timeout_seconds: int = Field(default=60, ge=5, le=600, description="Timeout for FFmpeg cutting in seconds")
+    ffprobe_timeout_seconds: int = Field(default=15, ge=2, le=120, description="Timeout for FFprobe probing in seconds")
+
+    # Directory Paths & Backups
     data_dir: Path = Field(default_factory=get_default_data_dir, description="Path to persistent data directory")
     temp_dir: Path = Field(default_factory=get_default_temp_dir, description="Path to temporary processing directory")
+    backup_retention_days: int = Field(default=7, ge=1, le=90, description="Days to retain database backups")
 
     # Logging
     log_level: str = Field(default="INFO", description="Logging level")
@@ -100,6 +108,10 @@ class Settings(BaseSettings):
     @property
     def jobs_dir(self) -> Path:
         return self.temp_dir / "jobs"
+
+    @property
+    def backups_dir(self) -> Path:
+        return self.data_dir / "backups"
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_ids

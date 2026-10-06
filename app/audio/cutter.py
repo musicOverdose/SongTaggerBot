@@ -104,7 +104,13 @@ class AudioCutter:
         duration = end_seconds - start_seconds
         if duration <= 0:
             logger.error(f"Invalid duration for trimming: start={start_seconds}, end={end_seconds}")
+            if output_path.exists():
+                output_path.unlink(missing_ok=True)
             return False
+
+        from app.config import get_settings
+        settings = get_settings()
+        ffmpeg_timeout = settings.ffmpeg_timeout_seconds
 
         # Attempt 1: Fast stream copy
         copy_cmd = [
@@ -117,12 +123,17 @@ class AudioCutter:
             str(output_path),
         ]
         try:
-            res = subprocess.run(copy_cmd, capture_output=True, text=True, timeout=30)
+            res = subprocess.run(copy_cmd, capture_output=True, text=True, timeout=min(30, ffmpeg_timeout))
             if res.returncode == 0 and output_path.exists() and output_path.stat().st_size > 1024:
                 logger.info(f"Stream-copy cut successful for {input_path}")
                 return True
+            else:
+                if output_path.exists():
+                    output_path.unlink(missing_ok=True)
         except Exception as e:
             logger.warning(f"Stream copy trimming failed or timed out: {e}")
+            if output_path.exists():
+                output_path.unlink(missing_ok=True)
 
         # Attempt 2: Re-encode fallback based on audio format
         audio_fmt, _, _ = FormatDetector.detect_format(input_path)
@@ -153,15 +164,19 @@ class AudioCutter:
         ]
 
         try:
-            res = subprocess.run(reencode_cmd, capture_output=True, text=True, timeout=60)
+            res = subprocess.run(reencode_cmd, capture_output=True, text=True, timeout=ffmpeg_timeout)
             if res.returncode == 0 and output_path.exists() and output_path.stat().st_size > 1024:
                 logger.info(f"Re-encode cut successful for {input_path}")
                 return True
             else:
                 logger.error(f"FFmpeg re-encode failed: {res.stderr}")
+                if output_path.exists():
+                    output_path.unlink(missing_ok=True)
                 return False
         except Exception as e:
             logger.error(f"FFmpeg cut invocation exception: {e}")
+            if output_path.exists():
+                output_path.unlink(missing_ok=True)
             return False
 
     @classmethod
@@ -175,3 +190,4 @@ class AudioCutter:
         return await asyncio.to_thread(
             cls.cut_audio_sync, input_path, output_path, start_seconds, end_seconds
         )
+

@@ -42,3 +42,47 @@ class JobRecord:
     status: str
     created_at: str
     updated_at: str
+
+
+@dataclass
+class WhitelistedUser:
+    user_id: int
+    username: Optional[str] = None
+    reason: Optional[str] = None
+    added_at: str = ""
+
+
+@dataclass
+class BannedUser:
+    user_id: int
+    username: Optional[str] = None
+    reason: Optional[str] = None
+    banned_at: str = ""
+
+
+@dataclass
+class AdminAuditLog:
+    id: Optional[int] = None
+    admin_id: int = 0
+    action: str = ""
+    target: Optional[str] = None
+    details: Optional[str] = None
+    created_at: str = ""
+
+
+@dataclass
+class BroadcastRecord:
+    id: Optional[int] = None
+    admin_id: int = 0
+    source_chat_id: int = 0
+    source_message_id: int = 0
+    text_preview: Optional[str] = None
+    total_targets: int = 0
+    delivered_count: int = 0
+    blocked_count: int = 0
+    failed_count: int = 0
+    status: str = "pending"
+    created_at: str = ""
+    completed_at: Optional[str] = None
+
+

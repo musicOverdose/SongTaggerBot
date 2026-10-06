@@ -17,8 +17,14 @@ from app.bot.formatting import format_metadata_preview
 from app.bot.keyboards.main_menu import get_preview_keyboard
 from app.config import Settings
 from app.database.repository import DatabaseRepository
-from app.services.job_manager import JobManager
+from app.services.job_manager import (
+    GlobalConcurrentJobLimitError,
+    JobManager,
+    MaintenanceModeError,
+    UserConcurrentJobLimitError,
+)
 from app.services.queue_manager import QueueManager
+from app.services.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +40,31 @@ async def handle_audio_upload(
     queue_manager: QueueManager,
     metadata_manager: MetadataManager,
     repository: DatabaseRepository,
+    rate_limiter: RateLimiter,
 ) -> None:
     await state.clear()
 
-    # 1. Extract file info and validate size from Telegram metadata
+    if not message.from_user:
+        return
+
+    is_admin = settings.is_admin(message.from_user.id)
+
+    # 1. Check rate limits for non-admin users
+    if not is_admin:
+        allowed, retry_after = rate_limiter.check(message.from_user.id)
+        if not allowed:
+            await message.reply(
+                f"⚠️ <b>Upload rate limit reached.</b>\n\n"
+                f"Please wait <b>{retry_after}s</b> before sending another audio file.",
+                parse_mode="HTML",
+            )
+            return
+
+    # Sync maintenance mode with database
+    is_maint = await repository.is_maintenance_mode()
+    job_manager.set_maintenance_mode(is_maint)
+
+    # 2. Extract file info and validate size from Telegram metadata
     telegram_file = message.audio or message.document
     if telegram_file is None:
         return
@@ -56,20 +83,44 @@ async def handle_audio_upload(
         )
         return
 
-    # 2. Cleanup previous user job if one exists
-    old_job = job_manager.get_user_active_job(message.from_user.id)
-    if old_job:
-        job_manager.cleanup_job(old_job.uuid)
-
     file_ext = Path(file_name).suffix or ".mp3"
-    job = job_manager.create_job(
-        user_id=message.from_user.id,
-        chat_id=message.chat.id,
-        original_filename=file_name,
-        file_ext=file_ext,
-    )
 
-    # 3. Define async task to execute in worker queue
+    # 3. Create job enforced at the service boundary
+    try:
+        job = job_manager.create_job(
+            user_id=message.from_user.id,
+            chat_id=message.chat.id,
+            original_filename=file_name,
+            file_ext=file_ext,
+            is_admin=is_admin,
+            enforce_limits=True,
+        )
+    except MaintenanceModeError:
+        await message.reply(
+            "🚧 <b>Maintenance Mode Active</b>\n\n"
+            "SongTaggerBot is currently undergoing maintenance. "
+            "New uploads are temporarily paused. Please check back shortly!",
+            parse_mode="HTML",
+        )
+        return
+    except UserConcurrentJobLimitError:
+        await message.reply(
+            "⚠️ <b>Active Session in Progress</b>\n\n"
+            "You already have an active editing session. Please finish or /cancel "
+            "your current track before uploading a new one.",
+            parse_mode="HTML",
+        )
+        return
+    except GlobalConcurrentJobLimitError:
+        await message.reply(
+            "🚦 <b>Server Busy</b>\n\n"
+            "The bot is currently handling maximum concurrent audio jobs. "
+            "Please try again in a few moments.",
+            parse_mode="HTML",
+        )
+        return
+
+    # 4. Define async task to execute in worker queue
     status_msg = await message.reply("⏳ <i>Processing file...</i>", parse_mode="HTML")
 
     async def process_upload():

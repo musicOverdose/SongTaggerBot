@@ -4,7 +4,7 @@
   <img src="assets/banner.svg" alt="TagForge Banner" width="750"/>
 </p>
 
-# TagForge
+# SongTaggerBot
 ### Production-Ready Telegram Audio Metadata Editor Bot
 *Created by [@MusicOverdose](https://github.com/musicOverdose)*
 
@@ -34,10 +34,16 @@ Designed to be deployed using **Docker Compose** directly through **Portainer** 
 - ✂️ **Audio Trimming / Cutting**: Fast stream-copy trimming using FFmpeg (`-c copy`) with automatic re-encoding fallback; preserves all tags and embedded artwork.
 - 📝 **Filename Sanitization & Generation**: Protects against directory traversal and control characters. Generates filenames from tags using configurable templates (e.g., `{track:02} - {title}`).
 - ↩ **Undo History & Staging**: Changes are staged in memory; audio files are never repeatedly re-encoded on every field edit. Undo changes step-by-step or cancel completely without modifying the original upload.
+- 🛡 **Abuse Protection & Rate Limiting**: In-memory sliding-window upload rate limiter, per-user concurrent job limiter, and global job concurrency ceiling enforced at the service boundary.
+- ⏱ **Media Safety & Process Timeouts**: Enforced FFmpeg/FFprobe subprocess execution timeouts with guaranteed atomic unlinking of partial output files on cancellation or failure.
+- 📡 **Resilient Broadcast Engine**: Backoff and automatic retry on Telegram `FloodWait`/`RetryAfter`, graceful accounting for blocked/deleted users, cooperative cancellation token, and persistent broadcast history.
+- 🗄 **Online Database Backups & Pruning**: Zero-downtime live SQLite backups via Python's native backup API (with `VACUUM INTO` fallback) and automated retention pruning.
+- 📜 **Administrative Audit Trail**: Every sensitive operation (bans, whitelisting, channel edits, reloads, backups, maintenance toggles) is immutably logged with paginated in-bot viewing.
+- 🛑 **Maintenance Mode**: Toggleable system maintenance mode enforced at the job-creation boundary with administrator bypass.
 - 🔒 **Zero Exposed HTTP Ports**: Operates entirely through Telegram Bot API long-polling. No Web UI, no Flask/FastAPI admin panel.
 - 📢 **Mandatory Channel Membership (Must-Join)**: Configurable channel membership gating with instant re-verification.
-- 🛠 **Container CLI Administration**: Administer channels, view stats, and trigger cleanup inside the container via `docker compose run --rm bot cli ...`.
-- 🗄 **Persistent SQLite Storage**: Stores required broadcast channels, usage statistics, and active job tracking in `./data:/data`.
+- 🛠 **Container CLI Administration**: Administer channels, backups, audit logs, maintenance mode, and stats inside the container via `docker compose run --rm bot cli ...`.
+- 🗄 **Persistent SQLite Storage**: Stores required broadcast channels, usage statistics, audit logs, and active job tracking in `./data:/data`.
 - 🚦 **Worker Queue**: Configurable concurrency pool (`MAX_CONCURRENT_JOBS`) with real-time queue position notifications.
 - 👤 **Non-Root Container Security**: Container runs as dedicated `botuser` (UID 10001).
 
@@ -109,6 +115,12 @@ cp .env.example .env
 | `MAX_INPUT_MB` | `20` | Maximum input audio file size in MB |
 | `MAX_OUTPUT_MB` | `50` | Maximum processed audio file size in MB |
 | `MAX_CONCURRENT_JOBS` | `2` | Number of simultaneous background worker tasks |
+| `MAX_USER_CONCURRENT_JOBS` | `1` | Maximum simultaneous active editing sessions per user |
+| `MAX_GLOBAL_CONCURRENT_JOBS` | `10` | Global system ceiling for simultaneous active editing sessions |
+| `RATE_LIMIT_UPLOADS_PER_MINUTE` | `5` | Maximum audio upload requests allowed per user per minute |
+| `FFMPEG_TIMEOUT_SECONDS` | `120` | Subprocess timeout for FFmpeg operations in seconds |
+| `FFPROBE_TIMEOUT_SECONDS` | `30` | Subprocess timeout for FFprobe operations in seconds |
+| `BACKUP_RETENTION_DAYS` | `7` | Retention window for automated SQLite database backups |
 | `JOB_TTL_MINUTES` | `30` | Inactivity lifetime for temporary processing jobs |
 | `DATA_DIR` | `/data` | Path to persistent database directory |
 | `TEMP_DIR` | `/tmp/audio-bot` | Path to temporary isolated job folders |
@@ -131,8 +143,8 @@ cp .env.example .env
 
 1. **Clone repository**:
    ```bash
-   git clone https://github.com/MusicOverdose/audio-metadata-editor-bot.git
-   cd audio-metadata-editor-bot
+   git clone https://github.com/musicOverdose/SongTaggerBot.git
+   cd SongTaggerBot
    ```
 
 2. **Configure environment**:
@@ -160,10 +172,10 @@ Portainer allows deploying the bot as a Stack without exposing any ports.
 
 1. Log into your **Portainer** dashboard.
 2. Navigate to **Stacks** &rarr; **Add stack**.
-3. Choose a name: `musicoverdose-bot`.
+3. Choose a name: `songtagger-bot`.
 4. Select **Repository** or **Web editor**:
    - **Option A (Repository)**:
-     - Repository URL: `https://github.com/MusicOverdose/audio-metadata-editor-bot.git`
+     - Repository URL: `https://github.com/musicOverdose/SongTaggerBot.git`
      - Repository reference: `refs/heads/main`
      - Compose path: `compose.yaml`
    - **Option B (Web editor)**:
@@ -184,20 +196,33 @@ Portainer allows deploying the bot as a Stack without exposing any ports.
 Administrative tasks can be executed inside the container without stopping the service:
 
 ```bash
-# List all required broadcast channels
+# Channels: List, add, enable, disable, remove
 docker compose run --rm bot cli channels list
-
-# Add a required channel (@username or -100... ID)
 docker compose run --rm bot cli channels add @MusicOverdose
-
-# Disable a channel temporarily
 docker compose run --rm bot cli channels disable @MusicOverdose
-
-# Re-enable a channel
 docker compose run --rm bot cli channels enable @MusicOverdose
-
-# Remove a required channel
 docker compose run --rm bot cli channels remove @MusicOverdose
+
+# Whitelist: Users who bypass must-join channel checks
+docker compose run --rm bot cli whitelist list
+docker compose run --rm bot cli whitelist add 123456789 --reason "VIP tester"
+docker compose run --rm bot cli whitelist remove 123456789
+
+# Ban List: Manage blocked users
+docker compose run --rm bot cli ban list
+docker compose run --rm bot cli ban add 987654321 --reason "Spamming"
+docker compose run --rm bot cli ban remove 987654321
+
+# Maintenance Mode: Check status, enable or disable
+docker compose run --rm bot cli maintenance status
+docker compose run --rm bot cli maintenance enable
+docker compose run --rm bot cli maintenance disable
+
+# Live Online SQLite Database Backup
+docker compose run --rm bot cli backup
+
+# Audit Trail: Inspect recorded administrative actions
+docker compose run --rm bot cli audit --limit 25
 
 # View bot operational statistics
 docker compose run --rm bot cli stats
@@ -208,17 +233,27 @@ docker compose run --rm bot cli cleanup
 
 ---
 
-## Admin Telegram Commands
+## Admin Telegram Commands & Dashboard
 
-Administrators (whose user IDs are in `ADMIN_IDS`) can also manage the bot directly inside Telegram:
+Administrators (whose user IDs are listed in `ADMIN_IDS`) have access to a full in-Telegram management suite:
 
+- `/admin` &mdash; **Interactive Operational Dashboard**: Displays real-time operational metrics including **system uptime**, **active jobs**, **temporary scratchpad disk usage**, **whitelist & ban counts**, **channel status**, and **maintenance mode**. Offers quick-action inline buttons to:
+  - 🔄 **Toggle Maintenance Mode**: Temporarily pause new user jobs while allowing admin testing.
+  - 💾 **Trigger Live Backup**: Execute consistent online SQLite database backups on-demand.
+  - 📜 **Audit Logs Viewer**: Browse paginated administrative logs with timestamps, actions, and admin IDs.
+  - 📢 **Resilient Broadcasting**: Send announcements with live progress updates, FloodWait backoff, blocked user tracking, and an interactive **Cancel Broadcast** button.
+  - 🗑 **Garbage Collection**: Reclaim scratch disk space and reconcile interrupted jobs.
 - `/channels` &mdash; View configured required channels and their status.
 - `/addchannel @username` &mdash; Add a mandatory broadcast channel.
 - `/delchannel @username` &mdash; Remove a mandatory broadcast channel.
+- `/whitelist` &mdash; View, add (`/whitelist add <id> [reason]`), or remove (`/whitelist del <id>`) must-join whitelisted users.
+- `/ban <user_id> [reason]` &mdash; Block a user from using the bot.
+- `/unban <user_id>` &mdash; Unban a previously blocked user.
+- `/banlist` &mdash; View list of banned users.
 - `/stats` &mdash; View files received, processed, cuts, and processed data volume.
 - `/reloadconfig` &mdash; Reload settings from environment without restarting.
 
-Regular users attempting to run these commands receive no response and have no access to administrative features.
+Regular users attempting to run these commands receive no response or an access denied alert.
 
 ---
 

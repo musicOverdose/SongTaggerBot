@@ -80,15 +80,59 @@ class Job:
         return last_change
 
 
+class JobLimitError(Exception):
+    """Base exception for job creation limit violations."""
+    pass
+
+
+class MaintenanceModeError(JobLimitError):
+    """Raised when job creation is blocked due to maintenance mode."""
+    pass
+
+
+class UserConcurrentJobLimitError(JobLimitError):
+    """Raised when a user exceeds their concurrent active job limit."""
+    pass
+
+
+class GlobalConcurrentJobLimitError(JobLimitError):
+    """Raised when the system exceeds its global concurrent job limit."""
+    pass
+
+
 class JobManager:
     """Manages creation, retrieval, and disk cleanup of audio editing jobs."""
 
-    def __init__(self, base_jobs_dir: Path, ttl_minutes: int = 30):
+    def __init__(
+        self,
+        base_jobs_dir: Path,
+        ttl_minutes: int = 30,
+        max_user_concurrent_jobs: int = 1,
+        max_global_concurrent_jobs: int = 10,
+    ):
         self.base_jobs_dir = base_jobs_dir
         self.ttl_seconds = ttl_minutes * 60
+        self.max_user_concurrent_jobs = max_user_concurrent_jobs
+        self.max_global_concurrent_jobs = max_global_concurrent_jobs
+        self._maintenance_mode: bool = False
         self._jobs: Dict[str, Job] = {}
         self._user_jobs: Dict[int, str] = {}  # user_id -> latest job uuid
         self._lock = asyncio.Lock()
+
+    def set_maintenance_mode(self, enabled: bool) -> None:
+        self._maintenance_mode = enabled
+
+    def is_maintenance_mode(self) -> bool:
+        return self._maintenance_mode
+
+    def count_user_active_jobs(self, user_id: int) -> int:
+        return sum(1 for j in self._jobs.values() if j.user_id == user_id and j.status == "active")
+
+    def get_active_jobs_count(self) -> int:
+        return sum(1 for j in self._jobs.values() if j.status == "active")
+
+    def get_active_jobs(self) -> List[Job]:
+        return [j for j in self._jobs.values() if j.status == "active"]
 
     def create_job(
         self,
@@ -96,7 +140,21 @@ class JobManager:
         chat_id: int,
         original_filename: str,
         file_ext: str,
+        is_admin: bool = False,
+        enforce_limits: bool = True,
     ) -> Job:
+        if enforce_limits and not is_admin:
+            if self._maintenance_mode:
+                raise MaintenanceModeError("Bot is currently in maintenance mode.")
+            if self.count_user_active_jobs(user_id) >= self.max_user_concurrent_jobs:
+                raise UserConcurrentJobLimitError(
+                    f"User {user_id} already has an active editing session."
+                )
+            if self.get_active_jobs_count() >= self.max_global_concurrent_jobs:
+                raise GlobalConcurrentJobLimitError(
+                    "System concurrent job limit reached. Please try again shortly."
+                )
+
         job_uuid = str(uuid.uuid4())
         job_dir = self.base_jobs_dir / job_uuid
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -185,3 +243,38 @@ class JobManager:
             logger.warning(f"Error scanning base jobs dir for expired jobs: {e}")
 
         return cleaned_count
+
+    def cleanup_orphaned_job_dirs(self) -> int:
+        """Removes all job directories on disk that are not tracked in active memory."""
+        cleaned = 0
+        if not self.base_jobs_dir.exists():
+            return 0
+        try:
+            for p in self.base_jobs_dir.iterdir():
+                if p.is_dir() and p.name not in self._jobs:
+                    try:
+                        shutil.rmtree(p, ignore_errors=True)
+                        cleaned += 1
+                        logger.info(f"Cleaned up orphaned job directory: {p}")
+                    except Exception as e:
+                        logger.warning(f"Failed to remove orphaned directory {p}: {e}")
+        except Exception as e:
+            logger.warning(f"Error scanning for orphaned job directories: {e}")
+        return cleaned
+
+    def get_temp_disk_usage_mb(self) -> float:
+        """Calculates total disk usage in megabytes across temporary job directories."""
+        if not self.base_jobs_dir.exists():
+            return 0.0
+        total_bytes = 0
+        try:
+            for p in self.base_jobs_dir.rglob("*"):
+                if p.is_file():
+                    try:
+                        total_bytes += p.stat().st_size
+                    except OSError:
+                        pass
+        except Exception as e:
+            logger.warning(f"Error calculating disk usage: {e}")
+        return round(total_bytes / (1024 * 1024), 2)
+

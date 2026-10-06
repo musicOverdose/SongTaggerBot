@@ -1,4 +1,4 @@
-"""Command-line administrative interface for MusicOverdose Bot."""
+"""Command-line administrative interface for SongTaggerBot."""
 
 import argparse
 import asyncio
@@ -63,10 +63,104 @@ async def cmd_channels_disable(repo: DatabaseRepository, channel_arg: str):
         sys.exit(1)
 
 
+async def cmd_whitelist_list(repo: DatabaseRepository):
+    whitelist = await repo.list_whitelist()
+    if not whitelist:
+        print("Whitelist is empty.")
+        return
+    print("Must-Join Whitelist:")
+    print("-" * 60)
+    for w in whitelist:
+        reason = f" - {w.reason}" if w.reason else ""
+        print(f"User ID: {w.user_id}{reason}")
+    print("-" * 60)
+
+
+async def cmd_whitelist_add(repo: DatabaseRepository, user_id: int, reason: str = None):
+    success = await repo.add_to_whitelist(user_id=user_id, reason=reason)
+    if success:
+        print(f"Successfully added user {user_id} to whitelist.")
+    else:
+        print(f"Failed to add user {user_id} to whitelist.", file=sys.stderr)
+        sys.exit(1)
+
+
+async def cmd_whitelist_remove(repo: DatabaseRepository, user_id: int):
+    success = await repo.remove_from_whitelist(user_id=user_id)
+    if success:
+        print(f"Successfully removed user {user_id} from whitelist.")
+    else:
+        print(f"User {user_id} not found in whitelist.", file=sys.stderr)
+        sys.exit(1)
+
+
+async def cmd_ban_list(repo: DatabaseRepository):
+    banned = await repo.list_banned()
+    if not banned:
+        print("Ban list is empty.")
+        return
+    print("Banned Users:")
+    print("-" * 60)
+    for b in banned:
+        reason = f" - {b.reason}" if b.reason else ""
+        print(f"User ID: {b.user_id}{reason}")
+    print("-" * 60)
+
+
+async def cmd_ban_add(repo: DatabaseRepository, user_id: int, reason: str = None):
+    success = await repo.ban_user(user_id=user_id, reason=reason)
+    if success:
+        print(f"Successfully banned user {user_id}.")
+    else:
+        print(f"Failed to ban user {user_id}.", file=sys.stderr)
+        sys.exit(1)
+
+
+async def cmd_ban_remove(repo: DatabaseRepository, user_id: int):
+    success = await repo.unban_user(user_id=user_id)
+    if success:
+        print(f"Successfully unbanned user {user_id}.")
+    else:
+        print(f"User {user_id} not found in ban list.", file=sys.stderr)
+        sys.exit(1)
+
+
+async def cmd_maintenance(repo: DatabaseRepository, action: str):
+    if action == "status":
+        is_maint = await repo.is_maintenance_mode()
+        print(f"Maintenance Mode: {'ENABLED (user uploads paused)' if is_maint else 'DISABLED (normal)'}")
+    elif action == "enable":
+        await repo.set_maintenance_mode(True)
+        print("Maintenance mode ENABLED. Non-admin uploads are now blocked.")
+    elif action == "disable":
+        await repo.set_maintenance_mode(False)
+        print("Maintenance mode DISABLED. Normal bot operations resumed.")
+
+
+async def cmd_backup(repo: DatabaseRepository, settings):
+    print("Creating live database backup...")
+    backup_file = await repo.backup_database(settings.backups_dir, settings.backup_retention_days)
+    size_kb = round(backup_file.stat().st_size / 1024, 1)
+    print(f"Backup created: {backup_file} ({size_kb} KB)")
+
+
+async def cmd_audit(repo: DatabaseRepository, limit: int = 20):
+    logs, total = await repo.get_audit_logs(limit=limit, offset=0)
+    print("=" * 65)
+    print(f"       SongTaggerBot Audit Logs (Showing {len(logs)} of {total})")
+    print("=" * 65)
+    for log in logs:
+        target_str = f" -> {log.target}" if log.target else ""
+        details_str = f" | {log.details}" if log.details else ""
+        ts = log.created_at[:19].replace("T", " ")
+        print(f"[{ts}] [{log.action:18s}] Admin: {log.admin_id}{target_str}{details_str}")
+    print("=" * 65)
+
+
 async def cmd_stats(repo: DatabaseRepository):
     stats = await repo.get_stats()
     print("=" * 45)
-    print("       MusicOverdose Bot Statistics")
+    print("       SongTaggerBot Statistics")
     print("=" * 45)
     print(f"Files Received:        {stats.files_received}")
     print(f"Files Processed:       {stats.files_processed}")
@@ -82,7 +176,8 @@ async def cmd_stats(repo: DatabaseRepository):
 def cmd_cleanup(settings):
     job_mgr = JobManager(base_jobs_dir=settings.jobs_dir, ttl_minutes=settings.job_ttl_minutes)
     count = job_mgr.cleanup_expired_jobs()
-    print(f"Cleanup completed. Removed {count} expired/abandoned job directories.")
+    orphaned = job_mgr.cleanup_orphaned_job_dirs()
+    print(f"Cleanup completed. Removed {count} expired and {orphaned} orphaned job directories.")
 
 
 async def async_main():
@@ -92,27 +187,56 @@ async def async_main():
 
     parser = argparse.ArgumentParser(
         prog="cli",
-        description="MusicOverdose Bot Administrative CLI",
+        description="SongTaggerBot Administrative CLI",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # channels subparser
     channels_parser = subparsers.add_parser("channels", help="Manage required broadcast channels")
     channels_sub = channels_parser.add_subparsers(dest="action", required=True)
-
     channels_sub.add_parser("list", help="List all configured required channels")
-
     add_p = channels_sub.add_parser("add", help="Add a required channel")
     add_p.add_argument("channel", help="Channel @username or ID")
-
     remove_p = channels_sub.add_parser("remove", help="Remove a required channel")
     remove_p.add_argument("channel", help="Channel @username or ID")
-
     enable_p = channels_sub.add_parser("enable", help="Enable a required channel")
     enable_p.add_argument("channel", help="Channel @username or ID")
-
     disable_p = channels_sub.add_parser("disable", help="Disable a required channel")
     disable_p.add_argument("channel", help="Channel @username or ID")
+
+    # whitelist subparser
+    wl_parser = subparsers.add_parser("whitelist", help="Manage must-join whitelist")
+    wl_sub = wl_parser.add_subparsers(dest="action", required=True)
+    wl_sub.add_parser("list", help="List whitelisted users")
+    wl_add_p = wl_sub.add_parser("add", help="Add user to whitelist")
+    wl_add_p.add_argument("user_id", type=int, help="Telegram user ID")
+    wl_add_p.add_argument("--reason", default=None, help="Optional reason")
+    wl_rem_p = wl_sub.add_parser("remove", help="Remove user from whitelist")
+    wl_rem_p.add_argument("user_id", type=int, help="Telegram user ID")
+
+    # ban subparser
+    ban_parser = subparsers.add_parser("ban", help="Manage banned users")
+    ban_sub = ban_parser.add_subparsers(dest="action", required=True)
+    ban_sub.add_parser("list", help="List banned users")
+    ban_add_p = ban_sub.add_parser("add", help="Ban a user")
+    ban_add_p.add_argument("user_id", type=int, help="Telegram user ID")
+    ban_add_p.add_argument("--reason", default=None, help="Optional reason")
+    ban_rem_p = ban_sub.add_parser("remove", help="Unban a user")
+    ban_rem_p.add_argument("user_id", type=int, help="Telegram user ID")
+
+    # maintenance subparser
+    maint_parser = subparsers.add_parser("maintenance", help="Manage maintenance mode")
+    maint_sub = maint_parser.add_subparsers(dest="action", required=True)
+    maint_sub.add_parser("status", help="Show current maintenance status")
+    maint_sub.add_parser("enable", help="Enable maintenance mode")
+    maint_sub.add_parser("disable", help="Disable maintenance mode")
+
+    # backup subparser
+    subparsers.add_parser("backup", help="Create live database backup")
+
+    # audit subparser
+    audit_parser = subparsers.add_parser("audit", help="View recent admin audit logs")
+    audit_parser.add_argument("--limit", type=int, default=20, help="Number of records to show")
 
     # stats parser
     subparsers.add_parser("stats", help="Show usage statistics")
@@ -120,7 +244,6 @@ async def async_main():
     # cleanup parser
     subparsers.add_parser("cleanup", help="Trigger cleanup of expired jobs")
 
-    # If invoked with args
     args = parser.parse_args()
 
     try:
@@ -135,6 +258,26 @@ async def async_main():
                 await cmd_channels_enable(repo, args.channel)
             elif args.action == "disable":
                 await cmd_channels_disable(repo, args.channel)
+        elif args.command == "whitelist":
+            if args.action == "list":
+                await cmd_whitelist_list(repo)
+            elif args.action == "add":
+                await cmd_whitelist_add(repo, args.user_id, args.reason)
+            elif args.action == "remove":
+                await cmd_whitelist_remove(repo, args.user_id)
+        elif args.command == "ban":
+            if args.action == "list":
+                await cmd_ban_list(repo)
+            elif args.action == "add":
+                await cmd_ban_add(repo, args.user_id, args.reason)
+            elif args.action == "remove":
+                await cmd_ban_remove(repo, args.user_id)
+        elif args.command == "maintenance":
+            await cmd_maintenance(repo, args.action)
+        elif args.command == "backup":
+            await cmd_backup(repo, settings)
+        elif args.command == "audit":
+            await cmd_audit(repo, args.limit)
         elif args.command == "stats":
             await cmd_stats(repo)
         elif args.command == "cleanup":

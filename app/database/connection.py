@@ -1,5 +1,6 @@
 """SQLite database connection and schema initialization."""
 
+import asyncio
 import logging
 from pathlib import Path
 import aiosqlite
@@ -38,6 +39,50 @@ CREATE TABLE IF NOT EXISTS active_jobs (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS whitelist_users (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    reason TEXT,
+    added_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS banned_users (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    reason TEXT,
+    banned_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT,
+    details TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS broadcast_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_id INTEGER NOT NULL,
+    source_chat_id INTEGER NOT NULL,
+    source_message_id INTEGER NOT NULL,
+    text_preview TEXT,
+    total_targets INTEGER DEFAULT 0,
+    delivered_count INTEGER DEFAULT 0,
+    blocked_count INTEGER DEFAULT 0,
+    failed_count INTEGER DEFAULT 0,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
 """
 
 
@@ -64,7 +109,39 @@ class Database:
             await self._connection.commit()
             logger.info("Database schema initialized successfully.")
 
+    async def backup(self, dest_path: Path) -> None:
+        """
+        Creates a consistent live backup of the SQLite database.
+        Prefers Python's sqlite3 online backup API, with VACUUM INTO fallback.
+        """
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        if dest_path.exists():
+            dest_path.unlink()
+
+        def _do_online_backup():
+            import sqlite3
+            src_conn = sqlite3.connect(str(self.db_path))
+            try:
+                dest_conn = sqlite3.connect(str(dest_path))
+                try:
+                    src_conn.backup(dest_conn)
+                finally:
+                    dest_conn.close()
+            finally:
+                src_conn.close()
+
+        try:
+            await asyncio.to_thread(_do_online_backup)
+            logger.info(f"SQLite online backup successful: {dest_path}")
+        except Exception as e:
+            logger.warning(f"SQLite online backup API failed ({e}), attempting VACUUM INTO fallback...")
+            conn = await self.connect()
+            dest_escaped = str(dest_path).replace("'", "''")
+            await conn.execute(f"VACUUM INTO '{dest_escaped}';")
+            logger.info(f"VACUUM INTO backup successful: {dest_path}")
+
     async def close(self) -> None:
         if self._connection:
             await self._connection.close()
             self._connection = None
+

@@ -18,7 +18,14 @@ class AudioProber:
     """Probes technical information from audio files."""
 
     @classmethod
-    def probe_sync(cls, file_path: Path) -> Optional[AudioTechnicalInfo]:
+    async def probe(cls, file_path: Path, timeout: Optional[int] = None) -> Optional[AudioTechnicalInfo]:
+        return await asyncio.to_thread(cls.probe_sync, file_path, timeout)
+
+    @classmethod
+    def probe_sync(cls, file_path: Path, timeout: Optional[int] = None) -> Optional[AudioTechnicalInfo]:
+        from app.config import get_settings
+        if timeout is None:
+            timeout = get_settings().ffprobe_timeout_seconds
         if not file_path.exists():
             return None
 
@@ -55,7 +62,6 @@ class AudioProber:
 
                 # Tag specific detection
                 if hasattr(m, "tags") and m.tags:
-                    # Check lyrics
                     tag_keys_lower = [str(k).lower() for k in m.tags.keys()]
                     if any("uslt" in k or "lyr" in k for k in tag_keys_lower):
                         has_lyrics = True
@@ -72,7 +78,7 @@ class AudioProber:
             logger.debug(f"Mutagen probe error for {file_path}: {e}")
 
         # 2. FFprobe to fill missing gaps
-        ff_data = cls._run_ffprobe(file_path)
+        ff_data = cls._run_ffprobe(file_path, timeout=timeout)
         if ff_data:
             format_dict = ff_data.get("format", {})
             streams = ff_data.get("streams", [])
@@ -124,6 +130,10 @@ class AudioProber:
             elif channels == 6:
                 channel_layout = "5.1 Surround"
 
+        # Sanity validation on duration: clamp negative/NaN to 0
+        if duration < 0 or duration != duration:
+            duration = 0.0
+
         # Friendly tag type name
         if "ID3" in tag_type or audio_fmt in (AudioFormat.MP3, AudioFormat.AIFF, AudioFormat.WAV):
             tag_type = "ID3v2"
@@ -152,12 +162,8 @@ class AudioProber:
             has_lyrics=has_lyrics,
         )
 
-    @classmethod
-    async def probe(cls, file_path: Path) -> Optional[AudioTechnicalInfo]:
-        return await asyncio.to_thread(cls.probe_sync, file_path)
-
     @staticmethod
-    def _run_ffprobe(file_path: Path) -> Optional[dict]:
+    def _run_ffprobe(file_path: Path, timeout: int = 15) -> Optional[dict]:
         try:
             cmd = [
                 "ffprobe",
@@ -167,9 +173,10 @@ class AudioProber:
                 "-show_streams",
                 str(file_path),
             ]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             if res.returncode == 0:
                 return json.loads(res.stdout)
         except Exception as e:
             logger.debug(f"ffprobe execution failed for {file_path}: {e}")
         return None
+

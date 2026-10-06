@@ -29,9 +29,11 @@ from app.bot.middleware.must_join_middleware import MustJoinMiddleware
 from app.config import get_settings
 from app.database.connection import Database
 from app.database.repository import DatabaseRepository
+from app.services.broadcast_service import BroadcastService
 from app.services.job_manager import JobManager
 from app.services.must_join_service import MustJoinService
 from app.services.queue_manager import QueueManager
+from app.services.rate_limiter import RateLimiter
 
 logger = logging.getLogger("musicoverdose_bot")
 
@@ -65,7 +67,7 @@ async def main():
         logger.error("BOT_TOKEN is not set! Please configure it in your environment or .env file.")
         sys.exit(1)
 
-    logger.info("Initializing MusicOverdose Audio Metadata Editor Bot...")
+    logger.info("Initializing SongTaggerBot...")
 
     # Ensure required directories exist
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -76,16 +78,35 @@ async def main():
     await db.connect()
     repository = DatabaseRepository(db)
 
+    # Reconcile interrupted jobs from previous unclean exits
+    interrupted_count = await repository.reconcile_interrupted_jobs()
+    if interrupted_count > 0:
+        logger.warning(f"Reconciled {interrupted_count} interrupted jobs from prior run.")
+
     job_manager = JobManager(
         base_jobs_dir=settings.jobs_dir,
         ttl_minutes=settings.job_ttl_minutes,
+        max_user_concurrent_jobs=settings.max_user_concurrent_jobs,
+        max_global_concurrent_jobs=settings.max_global_concurrent_jobs,
     )
+    orphaned_cleaned = job_manager.cleanup_orphaned_job_dirs()
+    if orphaned_cleaned > 0:
+        logger.info(f"Cleaned up {orphaned_cleaned} orphaned job directories from previous session.")
+
+    # Synchronize maintenance mode state
+    is_maint = await repository.is_maintenance_mode()
+    job_manager.set_maintenance_mode(is_maint)
 
     queue_manager = QueueManager(max_concurrent_jobs=settings.max_concurrent_jobs)
     queue_manager.start()
 
     metadata_manager = MetadataManager()
     must_join_service = MustJoinService(repository)
+    rate_limiter = RateLimiter(
+        max_requests=settings.rate_limit_uploads_per_minute,
+        window_seconds=60,
+    )
+    broadcast_service = BroadcastService(repository)
 
     # Configure Bot instance (support Local Bot API server if configured)
     session = None
@@ -112,6 +133,8 @@ async def main():
     dp["queue_manager"] = queue_manager
     dp["metadata_manager"] = metadata_manager
     dp["must_join_service"] = must_join_service
+    dp["rate_limiter"] = rate_limiter
+    dp["broadcast_service"] = broadcast_service
 
     # Attach Must-Join verification middleware to messages & callback queries
     dp.message.middleware(MustJoinMiddleware(must_join_service))
