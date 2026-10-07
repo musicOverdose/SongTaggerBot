@@ -6,11 +6,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
-# Install system dependencies: ffmpeg, media libraries, ca-certificates
+# Install system dependencies: ffmpeg, media libraries, ca-certificates, gosu
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libmagic1 \
     ca-certificates \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Create dedicated non-root user and group
@@ -32,12 +33,16 @@ COPY app/ ./app/
 RUN echo '#!/usr/bin/env bash\nexec python -m app.cli "$@"' > /usr/local/bin/cli && \
     chmod +x /usr/local/bin/cli
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Create and set permissions on data and temporary directories
 RUN mkdir -p /data /tmp/audio-bot && \
     chown -R botuser:botgroup /data /tmp/audio-bot /app
 
-# Switch to non-root user
-USER botuser
+# Entrypoint automatically ensures mounted volume permissions and drops to botuser
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 # Default command starts the bot in long polling mode
 CMD ["python", "-m", "app.main"]

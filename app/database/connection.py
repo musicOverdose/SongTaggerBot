@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 import aiosqlite
 
@@ -96,6 +97,15 @@ class Database:
     async def connect(self) -> aiosqlite.Connection:
         if self._connection is None:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            if not os.access(self.db_path.parent, os.W_OK):
+                uid = os.getuid() if hasattr(os, "getuid") else "N/A"
+                gid = os.getgid() if hasattr(os, "getgid") else "N/A"
+                logger.error(
+                    f"Database directory '{self.db_path.parent}' is not writable! "
+                    f"Current UID={uid}, GID={gid}. "
+                    f"If running in Docker/Portainer, ensure host volume has permissions for UID 10001: "
+                    f"'sudo chown -R 10001:10001 <path_to_data>'"
+                )
             self._connection = await aiosqlite.connect(str(self.db_path))
             self._connection.row_factory = aiosqlite.Row
             await self._connection.execute("PRAGMA journal_mode=WAL;")

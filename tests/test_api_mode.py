@@ -376,3 +376,19 @@ async def test_reset_to_env_defaults_clears_db_and_updates_restart_state(test_re
     assert len(logs) == 1
     assert logs[0].action == "reset_settings"
 
+
+def test_docker_entrypoint_and_dockerfile_permissions():
+    """Verify docker-entrypoint.sh exists, is executable, and Dockerfile uses it."""
+    entrypoint_path = Path("/home/farzad/metadataeditor/docker-entrypoint.sh")
+    assert entrypoint_path.exists(), "docker-entrypoint.sh must exist"
+    content = entrypoint_path.read_text()
+    assert "chown -R botuser:botgroup /data /tmp/audio-bot" in content
+    assert "gosu botuser" in content
+
+    dockerfile_path = Path("/home/farzad/metadataeditor/Dockerfile")
+    assert dockerfile_path.exists()
+    dockerfile_content = dockerfile_path.read_text()
+    assert "gosu" in dockerfile_content
+    assert 'ENTRYPOINT ["docker-entrypoint.sh"]' in dockerfile_content
+    assert "docker-entrypoint.sh" in dockerfile_content
+
