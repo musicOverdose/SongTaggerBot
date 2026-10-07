@@ -2,11 +2,13 @@
 
 import asyncio
 import logging
-from typing import Optional, Union
+from typing import List, Optional, Union
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+
+from app.database.models import BannedUser, WhitelistedUser
 
 from app.bot.keyboards.admin_menu import (
     get_admin_audit_logs_keyboard,
@@ -575,21 +577,94 @@ async def cmd_del_channel(message: Message, settings: Settings, repository: Data
 
 # --- Whitelist Management ---
 
+def _render_whitelist_text(whitelist: List[WhitelistedUser]) -> str:
+    lines = [
+        "⭐ <b>Must-Join Whitelist</b>\n",
+        "Users on this list bypass mandatory channel membership checks.\n",
+    ]
+    if whitelist:
+        lines.append("<b>Whitelisted Users:</b>")
+        for w in whitelist[:15]:
+            if w.reason and w.username:
+                lines.append(f"• <b>{w.reason}</b> (@{w.username} • <code>{w.user_id}</code>)")
+            elif w.reason:
+                lines.append(f"• <b>{w.reason}</b> (<code>{w.user_id}</code>)")
+            elif w.username:
+                lines.append(f"• @{w.username} (<code>{w.user_id}</code>)")
+            else:
+                lines.append(f"• <code>{w.user_id}</code>")
+        if len(whitelist) > 15:
+            lines.append(f"<i>...and {len(whitelist) - 15} more</i>")
+        lines.append(f"\nTotal: <b>{len(whitelist)}</b>")
+    else:
+        lines.append("<i>No users in whitelist.</i>")
+    return "\n".join(lines)
+
+
+def _render_banlist_text(banned: List[BannedUser]) -> str:
+    lines = [
+        "🚫 <b>Banned Users Management</b>\n",
+        "Banned users are blocked from all bot functionalities at middleware level.\n",
+    ]
+    if banned:
+        lines.append("<b>Banned Users:</b>")
+        for b in banned[:15]:
+            if b.reason and b.username:
+                lines.append(f"• <b>{b.reason}</b> (@{b.username} • <code>{b.user_id}</code>)")
+            elif b.reason:
+                lines.append(f"• <b>{b.reason}</b> (<code>{b.user_id}</code>)")
+            elif b.username:
+                lines.append(f"• @{b.username} (<code>{b.user_id}</code>)")
+            else:
+                lines.append(f"• <code>{b.user_id}</code>")
+        if len(banned) > 15:
+            lines.append(f"<i>...and {len(banned) - 15} more</i>")
+        lines.append(f"\nTotal: <b>{len(banned)}</b>")
+    else:
+        lines.append("<i>No users currently banned.</i>")
+    return "\n".join(lines)
+
+
 @router.callback_query(F.data == "adm_whitelist")
 async def callback_adm_whitelist(callback: CallbackQuery, settings: Settings, repository: DatabaseRepository) -> None:
     if not is_admin_check(callback, settings):
         await callback.answer("Unauthorized.", show_alert=True)
         return
     whitelist = await repository.list_whitelist()
-    text = (
-        "⭐ <b>Must-Join Whitelist</b>\n\n"
-        "Users on this list bypass mandatory channel membership checks.\n"
-        f"Total whitelisted users: <b>{len(whitelist)}</b>"
-    )
+    text = _render_whitelist_text(whitelist)
     kb = get_admin_whitelist_keyboard(whitelist)
     if callback.message:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm_wl_info:"))
+async def callback_adm_wl_info(callback: CallbackQuery, settings: Settings, repository: DatabaseRepository) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+    user_id_str = callback.data.split(":", 1)[1]
+    try:
+        user_id = int(user_id_str)
+        whitelist = await repository.list_whitelist()
+        entry = next((w for w in whitelist if w.user_id == user_id), None)
+        if entry:
+            title_str = entry.reason or "(No title set)"
+            username_str = f"@{entry.username}" if entry.username else "(None)"
+            added_str = entry.added_at[:19].replace("T", " ") if entry.added_at else "Unknown"
+            info_text = (
+                f"⭐ Whitelist User Info\n\n"
+                f"🏷 Title: {title_str}\n"
+                f"🆔 ID: {entry.user_id}\n"
+                f"👤 Username: {username_str}\n"
+                f"📅 Added: {added_str} UTC\n\n"
+                f"💡 Tip: To update title, re-add ID with new title."
+            )
+            await callback.answer(info_text, show_alert=True)
+        else:
+            await callback.answer("User not found in whitelist.", show_alert=True)
+    except Exception:
+        await callback.answer("Error retrieving user info.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("adm_wl_del:"))
@@ -610,9 +685,10 @@ async def callback_adm_wl_del(callback: CallbackQuery, settings: Settings, repos
     except ValueError:
         await callback.answer("Invalid user ID.")
     whitelist = await repository.list_whitelist()
+    text = _render_whitelist_text(whitelist)
     kb = get_admin_whitelist_keyboard(whitelist)
     if callback.message:
-        await callback.message.edit_reply_markup(reply_markup=kb)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data == "adm_wl_add")
@@ -623,8 +699,10 @@ async def callback_adm_wl_add(callback: CallbackQuery, state: FSMContext, settin
     await state.set_state(AdminStates.waiting_for_whitelist_input)
     text = (
         "⭐ <b>Add User to Whitelist</b>\n\n"
-        "Send the Telegram user ID to whitelist, optionally followed by a reason:\n"
-        "<code>123456789 VIP partner</code>"
+        "Send the Telegram user ID followed by a title/name for this user:\n"
+        "<code>123456789 Alex (VIP Producer)</code>\n\n"
+        "💡 <i>The title will be shown on the menu buttons so you can easily recognize them. "
+        "If you only send the ID, we will try to fetch their Telegram name automatically!</i>"
     )
     if callback.message:
         await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(), parse_mode="HTML")
@@ -640,12 +718,22 @@ async def process_whitelist_input(
     text = message.text.strip() if message.text else ""
     parts = text.split(maxsplit=1)
     if not parts or not parts[0].isdigit():
-        await message.reply("⚠️ Please enter a numeric Telegram user ID (e.g. <code>123456789</code>).", parse_mode="HTML")
+        await message.reply("⚠️ Please enter a numeric Telegram user ID (e.g. <code>123456789 Alex</code>).", parse_mode="HTML")
         return
     user_id = int(parts[0])
-    reason = parts[1] if len(parts) > 1 else None
+    reason = parts[1].strip() if len(parts) > 1 else None
 
-    await repository.add_to_whitelist(user_id=user_id, reason=reason)
+    username = None
+    try:
+        chat_info = await message.bot.get_chat(user_id)
+        if chat_info:
+            username = chat_info.username
+            if not reason:
+                reason = chat_info.full_name or (f"@{chat_info.username}" if chat_info.username else None)
+    except Exception:
+        pass
+
+    await repository.add_to_whitelist(user_id=user_id, username=username, reason=reason)
     await repository.log_audit_action(
         admin_id=message.from_user.id,
         action="add_whitelist",
@@ -655,7 +743,8 @@ async def process_whitelist_input(
     await state.clear()
     whitelist = await repository.list_whitelist()
     kb = get_admin_whitelist_keyboard(whitelist)
-    await message.answer(f"✅ Added user <code>{user_id}</code> to whitelist.", reply_markup=kb, parse_mode="HTML")
+    title_disp = f" (<b>{reason}</b>)" if reason else ""
+    await message.answer(f"✅ Added user <code>{user_id}</code>{title_disp} to whitelist.", reply_markup=kb, parse_mode="HTML")
 
 
 @router.message(Command("whitelist"))
@@ -665,19 +754,31 @@ async def cmd_whitelist(message: Message, settings: Settings, repository: Databa
     parts = message.text.split(maxsplit=2)
     if len(parts) >= 2 and parts[1].lower() == "add":
         if len(parts) < 3 or not parts[2].split()[0].isdigit():
-            await message.answer("Usage: <code>/whitelist add &lt;user_id&gt; [reason]</code>", parse_mode="HTML")
+            await message.answer("Usage: <code>/whitelist add &lt;user_id&gt; [title/name]</code>", parse_mode="HTML")
             return
         sub = parts[2].split(maxsplit=1)
         uid = int(sub[0])
-        reason = sub[1] if len(sub) > 1 else None
-        await repository.add_to_whitelist(uid, reason=reason)
+        reason = sub[1].strip() if len(sub) > 1 else None
+
+        username = None
+        try:
+            chat_info = await message.bot.get_chat(uid)
+            if chat_info:
+                username = chat_info.username
+                if not reason:
+                    reason = chat_info.full_name or (f"@{chat_info.username}" if chat_info.username else None)
+        except Exception:
+            pass
+
+        await repository.add_to_whitelist(uid, username=username, reason=reason)
         await repository.log_audit_action(
             admin_id=message.from_user.id,
             action="add_whitelist",
             target=str(uid),
             details=reason,
         )
-        await message.answer(f"✅ User <code>{uid}</code> whitelisted.", parse_mode="HTML")
+        title_disp = f" (<b>{reason}</b>)" if reason else ""
+        await message.answer(f"✅ User <code>{uid}</code>{title_disp} whitelisted.", parse_mode="HTML")
     elif len(parts) >= 2 and parts[1].lower() in ("del", "remove"):
         if len(parts) < 3 or not parts[2].strip().isdigit():
             await message.answer("Usage: <code>/whitelist del &lt;user_id&gt;</code>", parse_mode="HTML")
@@ -697,8 +798,14 @@ async def cmd_whitelist(message: Message, settings: Settings, repository: Databa
             return
         lines = ["⭐ <b>Whitelisted Users:</b>\n"]
         for w in whitelist:
-            r = f" ({w.reason})" if w.reason else ""
-            lines.append(f"• <code>{w.user_id}</code>{r}")
+            if w.reason and w.username:
+                lines.append(f"• <b>{w.reason}</b> (@{w.username} • <code>{w.user_id}</code>)")
+            elif w.reason:
+                lines.append(f"• <b>{w.reason}</b> — <code>{w.user_id}</code>")
+            elif w.username:
+                lines.append(f"• @{w.username} — <code>{w.user_id}</code>")
+            else:
+                lines.append(f"• <code>{w.user_id}</code>")
         await message.answer("\n".join(lines), parse_mode="HTML")
 
 
@@ -710,15 +817,39 @@ async def callback_adm_banlist(callback: CallbackQuery, settings: Settings, repo
         await callback.answer("Unauthorized.", show_alert=True)
         return
     banned = await repository.list_banned()
-    text = (
-        "🚫 <b>Banned Users Management</b>\n\n"
-        "Banned users are blocked from all bot functionalities at middleware level.\n"
-        f"Total banned users: <b>{len(banned)}</b>"
-    )
+    text = _render_banlist_text(banned)
     kb = get_admin_banlist_keyboard(banned)
     if callback.message:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm_ban_info:"))
+async def callback_adm_ban_info(callback: CallbackQuery, settings: Settings, repository: DatabaseRepository) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+    user_id_str = callback.data.split(":", 1)[1]
+    try:
+        user_id = int(user_id_str)
+        banned = await repository.list_banned()
+        entry = next((b for b in banned if b.user_id == user_id), None)
+        if entry:
+            reason_str = entry.reason or "(No reason specified)"
+            username_str = f"@{entry.username}" if entry.username else "(None)"
+            banned_str = entry.banned_at[:19].replace("T", " ") if entry.banned_at else "Unknown"
+            info_text = (
+                f"🚫 Banned User Info\n\n"
+                f"📝 Reason: {reason_str}\n"
+                f"🆔 ID: {entry.user_id}\n"
+                f"👤 Username: {username_str}\n"
+                f"📅 Banned: {banned_str} UTC"
+            )
+            await callback.answer(info_text, show_alert=True)
+        else:
+            await callback.answer("User not found in ban list.", show_alert=True)
+    except Exception:
+        await callback.answer("Error retrieving user info.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("adm_ban_del:"))
@@ -739,9 +870,10 @@ async def callback_adm_ban_del(callback: CallbackQuery, settings: Settings, repo
     except ValueError:
         await callback.answer("Invalid user ID.")
     banned = await repository.list_banned()
+    text = _render_banlist_text(banned)
     kb = get_admin_banlist_keyboard(banned)
     if callback.message:
-        await callback.message.edit_reply_markup(reply_markup=kb)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data == "adm_ban_add")
@@ -769,12 +901,20 @@ async def process_ban_input(
     text = message.text.strip() if message.text else ""
     parts = text.split(maxsplit=1)
     if not parts or not parts[0].isdigit():
-        await message.reply("⚠️ Please enter a numeric Telegram user ID (e.g. <code>123456789</code>).", parse_mode="HTML")
+        await message.reply("⚠️ Please enter a numeric Telegram user ID (e.g. <code>123456789 spammer</code>).", parse_mode="HTML")
         return
     user_id = int(parts[0])
-    reason = parts[1] if len(parts) > 1 else None
+    reason = parts[1].strip() if len(parts) > 1 else None
 
-    await repository.ban_user(user_id=user_id, reason=reason)
+    username = None
+    try:
+        chat_info = await message.bot.get_chat(user_id)
+        if chat_info:
+            username = chat_info.username
+    except Exception:
+        pass
+
+    await repository.ban_user(user_id=user_id, username=username, reason=reason)
     await repository.log_audit_action(
         admin_id=message.from_user.id,
         action="ban_user",
@@ -784,7 +924,8 @@ async def process_ban_input(
     await state.clear()
     banned = await repository.list_banned()
     kb = get_admin_banlist_keyboard(banned)
-    await message.answer(f"🚫 User <code>{user_id}</code> has been banned.", reply_markup=kb, parse_mode="HTML")
+    reason_disp = f" (<b>{reason}</b>)" if reason else ""
+    await message.answer(f"🚫 User <code>{user_id}</code>{reason_disp} has been banned.", reply_markup=kb, parse_mode="HTML")
 
 
 @router.message(Command("ban"))
@@ -796,15 +937,25 @@ async def cmd_ban(message: Message, settings: Settings, repository: DatabaseRepo
         await message.answer("Usage: <code>/ban &lt;user_id&gt; [reason]</code>", parse_mode="HTML")
         return
     uid = int(parts[1])
-    reason = parts[2] if len(parts) > 2 else None
-    await repository.ban_user(uid, reason=reason)
+    reason = parts[2].strip() if len(parts) > 2 else None
+
+    username = None
+    try:
+        chat_info = await message.bot.get_chat(uid)
+        if chat_info:
+            username = chat_info.username
+    except Exception:
+        pass
+
+    await repository.ban_user(uid, username=username, reason=reason)
     await repository.log_audit_action(
         admin_id=message.from_user.id,
         action="ban_user",
         target=str(uid),
         details=reason,
     )
-    await message.answer(f"🚫 User <code>{uid}</code> has been banned.", parse_mode="HTML")
+    reason_disp = f" (<b>{reason}</b>)" if reason else ""
+    await message.answer(f"🚫 User <code>{uid}</code>{reason_disp} has been banned.", parse_mode="HTML")
 
 
 @router.message(Command("unban"))
@@ -835,8 +986,14 @@ async def cmd_banlist(message: Message, settings: Settings, repository: Database
         return
     lines = ["🚫 <b>Banned Users:</b>\n"]
     for b in banned:
-        r = f" ({b.reason})" if b.reason else ""
-        lines.append(f"• <code>{b.user_id}</code>{r}")
+        if b.reason and b.username:
+            lines.append(f"• <b>{b.reason}</b> (@{b.username} • <code>{b.user_id}</code>)")
+        elif b.reason:
+            lines.append(f"• <b>{b.reason}</b> — <code>{b.user_id}</code>")
+        elif b.username:
+            lines.append(f"• @{b.username} — <code>{b.user_id}</code>")
+        else:
+            lines.append(f"• <code>{b.user_id}</code>")
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 

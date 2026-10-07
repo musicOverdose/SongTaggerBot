@@ -71,7 +71,16 @@ def get_admin_whitelist_keyboard(whitelist: List[WhitelistedUser]) -> InlineKeyb
     """Manage must-join whitelist users."""
     buttons = []
     for w in whitelist[:15]:  # Show latest 15
-        label = f"⭐ {w.username or w.user_id}"
+        if w.reason:
+            label = f"⭐ {w.reason}"
+        elif w.username:
+            label = f"⭐ @{w.username}"
+        else:
+            label = f"⭐ ID: {w.user_id}"
+
+        if len(label) > 28:
+            label = label[:25] + "..."
+
         buttons.append([
             InlineKeyboardButton(text=label, callback_data=f"adm_wl_info:{w.user_id}"),
             InlineKeyboardButton(text="🗑 Remove", callback_data=f"adm_wl_del:{w.user_id}"),
@@ -89,7 +98,16 @@ def get_admin_banlist_keyboard(banned: List[BannedUser]) -> InlineKeyboardMarkup
     """Manage banned users."""
     buttons = []
     for b in banned[:15]:  # Show latest 15
-        label = f"🚫 {b.username or b.user_id}"
+        if b.reason:
+            label = f"🚫 {b.reason}"
+        elif b.username:
+            label = f"🚫 @{b.username}"
+        else:
+            label = f"🚫 ID: {b.user_id}"
+
+        if len(label) > 28:
+            label = label[:25] + "..."
+
         buttons.append([
             InlineKeyboardButton(text=label, callback_data=f"adm_ban_info:{b.user_id}"),
             InlineKeyboardButton(text="🔓 Unban", callback_data=f"adm_ban_del:{b.user_id}"),

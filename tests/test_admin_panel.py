@@ -113,3 +113,56 @@ async def test_admin_stats_and_reload(test_repo: DatabaseRepository):
     await cmd_reload_config(msg, settings)
     msg.answer.assert_called_once()
     assert "reloaded" in msg.answer.call_args[0][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_admin_whitelist_title_and_info_display(test_repo: DatabaseRepository, fsm_context):
+    from app.database.models import WhitelistedUser, BannedUser
+    from app.bot.keyboards.admin_menu import get_admin_whitelist_keyboard, get_admin_banlist_keyboard
+    from app.bot.handlers.admin_handlers import (
+        callback_adm_wl_info,
+        callback_adm_ban_info,
+        callback_adm_whitelist,
+        _render_whitelist_text,
+        _render_banlist_text,
+    )
+
+    settings = Settings(bot_token="test", admin_ids=[1001])
+
+    # 1. Verify keyboard title formatting
+    user_with_title = WhitelistedUser(user_id=123, username="alex", reason="Alex VIP Producer")
+    user_with_user = WhitelistedUser(user_id=456, username="coolguy", reason=None)
+    user_id_only = WhitelistedUser(user_id=789, username=None, reason=None)
+    user_long_title = WhitelistedUser(user_id=999, username=None, reason="Super Long Title Exceeding Max Length Limit")
+
+    kb = get_admin_whitelist_keyboard([user_with_title, user_with_user, user_id_only, user_long_title])
+    assert kb.inline_keyboard[0][0].text == "⭐ Alex VIP Producer"
+    assert kb.inline_keyboard[1][0].text == "⭐ @coolguy"
+    assert kb.inline_keyboard[2][0].text == "⭐ ID: 789"
+    assert kb.inline_keyboard[3][0].text.endswith("...")
+
+    # 2. Ban keyboard formatting
+    banned_with_reason = BannedUser(user_id=111, username="badguy", reason="Spammer Bot")
+    banned_kb = get_admin_banlist_keyboard([banned_with_reason])
+    assert banned_kb.inline_keyboard[0][0].text == "🚫 Spammer Bot"
+
+    # 3. Add to repo and test callback_adm_wl_info popup
+    await test_repo.add_to_whitelist(user_id=123, username="alex", reason="Alex VIP Producer")
+    cb = MagicMock()
+    cb.from_user.id = 1001
+    cb.data = "adm_wl_info:123"
+    cb.answer = AsyncMock()
+
+    await callback_adm_wl_info(cb, settings, test_repo)
+    cb.answer.assert_called_once()
+    alert_text = cb.answer.call_args[0][0]
+    assert "Alex VIP Producer" in alert_text
+    assert "123" in alert_text
+    assert "@alex" in alert_text
+    assert cb.answer.call_args[1]["show_alert"] is True
+
+    # 4. Text render helper displays title prominently
+    text = _render_whitelist_text([user_with_title, user_id_only])
+    assert "• <b>Alex VIP Producer</b> (@alex • <code>123</code>)" in text
+    assert "• <code>789</code>" in text
+
