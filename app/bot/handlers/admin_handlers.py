@@ -432,6 +432,14 @@ async def cmd_channels(message: Message, settings: Settings, repository: Databas
 
 # --- Required Broadcast Channels Management ---
 
+def _safe_alert(text: str, max_len: int = 195) -> str:
+    """Safely truncates alert text to strictly stay within Telegram's 200-char answerCallbackQuery limit."""
+    text = text.strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
+
+
 def _render_channels_text(channels: List[RequiredChannel]) -> str:
     lines = [
         "📢 <b>Must-Join Channels Management</b>\n",
@@ -528,29 +536,29 @@ async def callback_adm_ch_info(callback: CallbackQuery, settings: Settings, repo
         chat_arg = int(target.channel_id) if (target.channel_id.startswith("-") or target.channel_id.isdigit()) else (f"@{target.username}" if target.username else target.channel_id)
         member = await callback.bot.get_chat_member(chat_id=chat_arg, user_id=callback.bot.id)
         if member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
-            bot_status = "🟢 Administrator (Active)"
+            bot_status = "🟢 Admin"
         else:
-            bot_status = f"🔴 {member.status.capitalize()} (Admin needed!)"
+            bot_status = f"🔴 {member.status.capitalize()}"
     except Exception:
-        bot_status = "⚠️ Inaccessible (Promote bot to Admin)"
+        bot_status = "⚠️ No access"
 
-    title_str = target.title or "(No title set)"
-    username_str = f"@{target.username}" if target.username else "(Private)"
-    link_str = target.invite_link or "(None set)"
-    status_str = "🟢 Enabled (Active)" if target.is_enabled else "🔴 Disabled"
-    added_str = target.created_at[:19].replace("T", " ") if target.created_at else "Unknown"
+    title_str = target.title or target.channel_id
+    if len(title_str) > 24:
+        title_str = title_str[:21] + "..."
+    user_str = f"@{target.username}" if target.username else "Private"
+    status_str = "🟢 On" if target.is_enabled else "🔴 Off"
+    link_str = target.invite_link or "None"
+    if len(link_str) > 30:
+        link_str = link_str[:27] + "..."
 
     info_text = (
-        f"📢 Channel Information\n\n"
-        f"🏷 Title: {title_str}\n"
-        f"🆔 ID: {target.channel_id}\n"
-        f"👤 Username: {username_str}\n"
-        f"🔗 Link: {link_str}\n"
-        f"⚡ Status: {status_str}\n"
-        f"🤖 Bot Rights: {bot_status}\n"
-        f"📅 Added: {added_str} UTC"
+        f"📢 {title_str}\n"
+        f"• ID: {target.channel_id}\n"
+        f"• User: {user_str}\n"
+        f"• Status: {status_str} | Bot: {bot_status}\n"
+        f"• Link: {link_str}"
     )
-    await callback.answer(info_text, show_alert=True)
+    await callback.answer(_safe_alert(info_text), show_alert=True)
 
 
 @router.callback_query(F.data == "adm_ch_sync")
@@ -832,17 +840,18 @@ async def callback_adm_wl_info(callback: CallbackQuery, settings: Settings, repo
         entry = next((w for w in whitelist if w.user_id == user_id), None)
         if entry:
             title_str = entry.reason or "(No title set)"
+            if len(title_str) > 30:
+                title_str = title_str[:27] + "..."
             username_str = f"@{entry.username}" if entry.username else "(None)"
-            added_str = entry.added_at[:19].replace("T", " ") if entry.added_at else "Unknown"
+            added_str = entry.added_at[:10] if entry.added_at else "Unknown"
             info_text = (
-                f"⭐ Whitelist User Info\n\n"
-                f"🏷 Title: {title_str}\n"
-                f"🆔 ID: {entry.user_id}\n"
-                f"👤 Username: {username_str}\n"
-                f"📅 Added: {added_str} UTC\n\n"
-                f"💡 Tip: To update title, re-add ID with new title."
+                f"⭐ Whitelist User\n"
+                f"• Title: {title_str}\n"
+                f"• ID: {entry.user_id}\n"
+                f"• User: {username_str}\n"
+                f"• Added: {added_str}"
             )
-            await callback.answer(info_text, show_alert=True)
+            await callback.answer(_safe_alert(info_text), show_alert=True)
         else:
             await callback.answer("User not found in whitelist.", show_alert=True)
     except Exception:
@@ -1048,16 +1057,18 @@ async def callback_adm_ban_info(callback: CallbackQuery, settings: Settings, rep
         entry = next((b for b in banned if b.user_id == user_id), None)
         if entry:
             reason_str = entry.reason or "(No reason specified)"
+            if len(reason_str) > 35:
+                reason_str = reason_str[:32] + "..."
             username_str = f"@{entry.username}" if entry.username else "(None)"
-            banned_str = entry.banned_at[:19].replace("T", " ") if entry.banned_at else "Unknown"
+            banned_str = entry.banned_at[:10] if entry.banned_at else "Unknown"
             info_text = (
-                f"🚫 Banned User Info\n\n"
-                f"📝 Reason: {reason_str}\n"
-                f"🆔 ID: {entry.user_id}\n"
-                f"👤 Username: {username_str}\n"
-                f"📅 Banned: {banned_str} UTC"
+                f"🚫 Banned User\n"
+                f"• Reason: {reason_str}\n"
+                f"• ID: {entry.user_id}\n"
+                f"• User: {username_str}\n"
+                f"• Banned: {banned_str}"
             )
-            await callback.answer(info_text, show_alert=True)
+            await callback.answer(_safe_alert(info_text), show_alert=True)
         else:
             await callback.answer("User not found in ban list.", show_alert=True)
     except Exception:
