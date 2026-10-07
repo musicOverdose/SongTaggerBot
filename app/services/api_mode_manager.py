@@ -1,4 +1,4 @@
-"""Service coordinating safe runtime switching between Cloud and Local Bot API modes."""
+"""Service coordinating safe configuration of Cloud vs Centralized Local Bot API modes."""
 
 import asyncio
 import logging
@@ -6,7 +6,6 @@ from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 from aiogram import Bot
-from aiogram.client.telegram import PRODUCTION, TelegramAPIServer
 
 from app.config import Settings
 from app.database.repository import DatabaseRepository
@@ -15,24 +14,90 @@ logger = logging.getLogger(__name__)
 
 
 class ApiModeManager:
-    """Coordinates safe runtime switching between Cloud and Centralized Local Bot API modes."""
+    """
+    Coordinates safe configuration of Cloud vs Centralized Local Bot API modes.
+
+    IMPORTANT: Moving a Telegram bot between Bot API servers (e.g. Cloud <-> Local or
+    Local <-> different Local server) requires proper Telegram `logOut` and bot restart/reconnect.
+    In-memory session hot-switching (`bot.session.api = ...`) is not performed.
+    """
 
     def __init__(
         self,
-        bot: Bot,
+        bot: Optional[Bot],
         settings: Settings,
         repository: DatabaseRepository,
+        running_mode: Optional[str] = None,
+        running_endpoint: Optional[str] = None,
     ):
         self.bot = bot
         self.settings = settings
         self.repository = repository
-        self._switch_lock = asyncio.Lock()
+        self.running_mode = (running_mode or settings.telegram_api_mode).lower().strip()
+        self.running_endpoint = (running_endpoint or settings.effective_api_base_url).strip().rstrip("/")
+        self._lock = asyncio.Lock()
 
-    def get_current_mode(self) -> str:
+    def get_running_mode(self) -> str:
+        """Returns the mode with which the currently running bot session was started ('cloud' or 'local')."""
+        return self.running_mode
+
+    def get_running_endpoint(self) -> str:
+        """Returns the endpoint URL the currently running bot session is connected to."""
+        return self.running_endpoint
+
+    def get_configured_mode(self) -> str:
+        """Returns the currently configured mode in settings/DB ('cloud' or 'local')."""
         return "local" if self.settings.is_local_mode else "cloud"
 
+    def get_configured_endpoint(self) -> str:
+        """Returns the currently configured API base URL."""
+        return self.settings.effective_api_base_url.strip().rstrip("/")
+
+    # Backwards-compatible aliases for legacy callers
+    def get_current_mode(self) -> str:
+        return self.get_configured_mode()
+
     def get_current_endpoint(self) -> str:
-        return self.settings.effective_api_base_url
+        return self.get_configured_endpoint()
+
+    def is_restart_required(self) -> bool:
+        """
+        True if the configured mode or configured endpoint differs from the currently running bot instance.
+        """
+        return (
+            self.get_configured_mode() != self.get_running_mode()
+            or self.get_configured_endpoint() != self.get_running_endpoint()
+        )
+
+    def is_migration_required(self) -> bool:
+        """
+        True if the configured endpoint represents a different Bot API server from the running server.
+        Telegram Bot API requires manual logOut on the previous server before reconnecting to a new one.
+        """
+        return self.get_configured_endpoint() != self.get_running_endpoint()
+
+    @staticmethod
+    def get_migration_instructions() -> str:
+        """Returns formatted HTML migration guide."""
+        return (
+            "⚠️ <b>Telegram Bot API Migration Required</b>\n\n"
+            "Moving between Telegram Bot API servers requires proper session termination.\n"
+            "<b>Before restarting:</b>\n"
+            "1. Stop the bot.\n"
+            "2. Call Telegram <code>logOut</code> through the current/old Bot API server.\n"
+            "3. Start the bot with the new endpoint."
+        )
+
+    @staticmethod
+    def get_migration_instructions_text() -> str:
+        """Returns plain-text migration guide for CLI/logs."""
+        return (
+            "⚠️ Telegram Bot API migration required\n\n"
+            "Before restarting:\n"
+            "1. Stop the bot.\n"
+            "2. Call Telegram logOut through the current/old Bot API server.\n"
+            "3. Start the bot with the new endpoint."
+        )
 
     @staticmethod
     def validate_local_url(url: str) -> bool:
@@ -43,33 +108,22 @@ class ApiModeManager:
         except Exception:
             return False
 
-    async def switch_mode(
+    async def configure_mode(
         self,
         new_mode: str,
         new_base_url: Optional[str] = None,
         admin_id: Optional[int] = None,
     ) -> Tuple[bool, str]:
         """
-        Safely transitions the bot between Cloud and Local Bot API modes at runtime.
-
-        Steps:
-        1. Acquire switch lock to avoid race conditions.
-        2. Resolve and validate target TelegramAPIServer (always is_local=False).
-        3. Temporarily update bot.session.api.
-        4. Verify connectivity using bot.get_me().
-        5. If get_me() fails, rollback to previous API server immediately.
-        6. If get_me() succeeds, persist to DB, update Settings, adjust limits, and log audit.
+        Persists the target API mode and endpoint to settings/database.
+        Does NOT hot-switch bot.session.api dynamically.
+        Flags whether restart and/or Telegram migration are required.
         """
         new_mode = new_mode.lower().strip()
         if new_mode not in ("cloud", "local"):
             return False, f"Invalid API mode: '{new_mode}'. Must be 'cloud' or 'local'."
 
-        async with self._switch_lock:
-            prev_mode = self.get_current_mode()
-            prev_url = self.get_current_endpoint()
-            prev_server = getattr(self.bot.session, "api", PRODUCTION)
-
-            # Determine candidate API server
+        async with self._lock:
             if new_mode == "local":
                 target_url = (new_base_url or self.settings.telegram_api_base_url).strip().rstrip("/")
                 if not target_url or target_url == "https://api.telegram.org":
@@ -77,28 +131,15 @@ class ApiModeManager:
 
                 if not self.validate_local_url(target_url):
                     return False, f"Invalid Local Bot API URL: '{target_url}'. Must start with http:// or https:// with a valid host."
-
-                # Centralized server MUST use is_local=False
-                candidate_server = TelegramAPIServer.from_base(target_url, is_local=False)
             else:
                 target_url = "https://api.telegram.org"
-                candidate_server = PRODUCTION
 
-            logger.info(f"Initiating runtime API switch from {prev_mode} ({prev_url}) to {new_mode} ({target_url})...")
+            # Persist configuration to database
+            await self.repository.set_system_setting("telegram_api_mode", new_mode)
+            if new_mode == "local":
+                await self.repository.set_system_setting("telegram_api_base_url", target_url)
 
-            # Apply candidate server temporarily
-            self.bot.session.api = candidate_server
-
-            # Verify connectivity via getMe
-            try:
-                me = await asyncio.wait_for(self.bot.get_me(), timeout=10.0)
-            except Exception as exc:
-                # Rollback immediately to prevent disruption
-                self.bot.session.api = prev_server
-                logger.error(f"Runtime switch verification failed for {new_mode} ({target_url}): {exc}. Reverted to {prev_mode}.")
-                return False, f"Connection verification failed for {new_mode.upper()} mode: {exc}. Rolled back to {prev_mode} mode."
-
-            # Verification succeeded - update in-memory settings
+            # Update in-memory settings
             self.settings.telegram_api_mode = new_mode
             if new_mode == "local":
                 self.settings.telegram_api_base_url = target_url
@@ -112,7 +153,6 @@ class ApiModeManager:
                     self.settings.max_output_mb = 50
                     await self.repository.set_system_setting("max_output_mb", "50")
             elif new_mode == "local":
-                # If limits were at default cloud limits, scale up to local defaults
                 if self.settings.max_input_mb <= 20:
                     self.settings.max_input_mb = 2000
                     await self.repository.set_system_setting("max_input_mb", "2000")
@@ -120,99 +160,94 @@ class ApiModeManager:
                     self.settings.max_output_mb = 2000
                     await self.repository.set_system_setting("max_output_mb", "2000")
 
-            # Persist mode & base URL in database system_settings
-            await self.repository.set_system_setting("telegram_api_mode", new_mode)
-            if new_mode == "local":
-                await self.repository.set_system_setting("telegram_api_base_url", target_url)
+            mig_req = self.is_migration_required()
+            rst_req = self.is_restart_required()
 
             # Record in admin audit log
-            if admin_id:
+            if admin_id is not None:
+                audit_note = "Migration required" if mig_req else ("Restart required" if rst_req else "Applied")
                 await self.repository.log_audit_action(
                     admin_id=admin_id,
-                    action="switch_api_mode",
-                    details=f"Switched to {new_mode} mode ({target_url}). Verified as @{me.username} (ID: {me.id})",
+                    action="configure_api_mode",
+                    details=f"Configured {new_mode} mode ({target_url}). {audit_note}",
                 )
 
-            logger.info(f"Runtime API switch completed successfully. Bot active in {new_mode} mode ({target_url}).")
-            return True, f"Switched to {new_mode.upper()} mode!\nEndpoint: <code>{target_url}</code>\nConnected as: @{me.username}"
+            # Build response message
+            if mig_req:
+                msg = (
+                    f"Configured API mode saved as <b>{new_mode.upper()}</b> (<code>{target_url}</code>).\n\n"
+                    f"⚠️ <b>Telegram Bot API migration required!</b>\n"
+                    f"Current server: <code>{self.running_endpoint}</code>\n"
+                    f"Target server: <code>{target_url}</code>\n\n"
+                    f"<b>Before restarting:</b>\n"
+                    f"1. Stop the bot.\n"
+                    f"2. Call Telegram <code>logOut</code> through current server.\n"
+                    f"3. Start the bot with new endpoint."
+                )
+            elif rst_req:
+                msg = (
+                    f"Configured API mode saved as <b>{new_mode.upper()}</b> (<code>{target_url}</code>).\n\n"
+                    f"⚠️ <b>Restart required to apply changes.</b>"
+                )
+            else:
+                msg = f"Configured API mode matches active running mode ({new_mode.upper()})."
+
+            return True, msg
+
+    async def switch_mode(
+        self,
+        new_mode: str,
+        new_base_url: Optional[str] = None,
+        admin_id: Optional[int] = None,
+    ) -> Tuple[bool, str]:
+        """Backwards-compatible alias for configure_mode."""
+        return await self.configure_mode(new_mode, new_base_url, admin_id)
 
     async def update_local_url(self, new_url: str, admin_id: Optional[int] = None) -> Tuple[bool, str]:
-        """Updates the local API URL. If already in local mode, applies and verifies immediately."""
+        """Updates the configured local API URL."""
         new_url = new_url.strip().rstrip("/")
         if not self.validate_local_url(new_url):
             return False, f"Invalid URL: '{new_url}'. Must start with http:// or https:// with a valid host."
 
-        if self.settings.is_local_mode:
-            return await self.switch_mode("local", new_base_url=new_url, admin_id=admin_id)
+        async with self._lock:
+            self.settings.telegram_api_base_url = new_url
+            await self.repository.set_system_setting("telegram_api_base_url", new_url)
 
-        # In cloud mode, simply save the local URL setting for future use
-        self.settings.telegram_api_base_url = new_url
-        await self.repository.set_system_setting("telegram_api_base_url", new_url)
-        if admin_id:
-            await self.repository.log_audit_action(
-                admin_id=admin_id,
-                action="update_setting",
-                details=f"Updated Local Bot API URL to {new_url}",
-            )
-        return True, f"Local Bot API URL set to <code>{new_url}</code> (will be used when Local Mode is active)."
+            mig_req = self.is_migration_required()
+            rst_req = self.is_restart_required()
+
+            if admin_id is not None:
+                await self.repository.log_audit_action(
+                    admin_id=admin_id,
+                    action="update_setting",
+                    details=f"Updated Local Bot API URL to {new_url}" + (" (Migration required)" if mig_req else ""),
+                )
+
+            if mig_req:
+                msg = (
+                    f"Local Bot API URL set to <code>{new_url}</code>.\n\n"
+                    f"⚠️ <b>Telegram Bot API migration required!</b>\n"
+                    f"Current server: <code>{self.running_endpoint}</code>\n"
+                    f"Target server: <code>{new_url}</code>\n\n"
+                    f"<b>Before restarting:</b>\n"
+                    f"1. Stop the bot.\n"
+                    f"2. Call Telegram <code>logOut</code> on old server.\n"
+                    f"3. Start the bot with new endpoint."
+                )
+            elif rst_req:
+                msg = f"Local Bot API URL set to <code>{new_url}</code>.\n⚠️ Restart required to apply changes."
+            else:
+                msg = f"Local Bot API URL set to <code>{new_url}</code>."
+
+            return True, msg
 
     async def reset_to_env_defaults(self, admin_id: Optional[int] = None) -> Tuple[bool, str]:
         """
-        Transactionally resets dynamic overrides back to .env values with verification and rollback.
-
-        Steps:
-        1. Acquire switch lock to avoid race conditions.
-        2. Save the current API server/session state.
-        3. Load the .env configuration into a candidate instance.
-        4. Build candidate API server.
-        5. Temporarily assign candidate to bot.session.api.
-        6. Verify connectivity using get_me() with 10s timeout.
-        7. If verification fails:
-           - restore previous bot.session.api
-           - do NOT clear any DB overrides
-           - do NOT change in-memory settings
-           - do NOT write an audit log
-           - return clear failure message
-        8. Only if verification succeeds:
-           - clear the database overrides
-           - update in-memory settings
-           - commit the successful reset
-           - write the audit log
-           - return success
+        Resets dynamic overrides back to .env values.
+        Does NOT hot-switch bot.session.api dynamically.
         """
-        async with self._switch_lock:
-            # 2. Save current API server/session state
-            prev_server = getattr(self.bot.session, "api", PRODUCTION)
-            prev_mode = self.get_current_mode()
-
-            # 3. Load the .env configuration
-            candidate_settings = Settings()
-
-            # 4. Build candidate API server
-            if candidate_settings.is_local_mode:
-                target_server = TelegramAPIServer.from_base(
-                    candidate_settings.effective_api_base_url,
-                    is_local=False,
-                )
-            else:
-                target_server = PRODUCTION
-
-            # 5. Temporarily assign candidate
-            self.bot.session.api = target_server
-
-            # 6. Verify connectivity via getMe
-            try:
-                me = await asyncio.wait_for(self.bot.get_me(), timeout=10.0)
-            except Exception as exc:
-                # 7. Verification failed: restore previous bot.session.api, leave DB and memory untouched
-                self.bot.session.api = prev_server
-                logger.error(
-                    f"Connection verification failed during reset to .env defaults: {exc}. "
-                    f"Rolled back to {prev_mode} mode."
-                )
-                return False, f"Connection verification failed during reset ({exc}). Previous configuration retained."
-
-            # 8. Verification succeeded: clear database overrides
+        async with self._lock:
+            # Clear database overrides
             for key in (
                 "telegram_api_mode",
                 "telegram_api_base_url",
@@ -223,7 +258,9 @@ class ApiModeManager:
             ):
                 await self.repository.set_system_setting(key, "")
 
-            # Update in-memory settings
+            # Reload fresh settings from .env / environment
+            candidate_settings = Settings()
+
             self.settings.telegram_api_mode = candidate_settings.telegram_api_mode
             self.settings.telegram_api_base_url = candidate_settings.telegram_api_base_url
             self.settings.max_input_mb = candidate_settings.max_input_mb
@@ -231,19 +268,41 @@ class ApiModeManager:
             self.settings.show_technical_info = candidate_settings.show_technical_info
             self.settings.send_cover_separately = candidate_settings.send_cover_separately
 
-            # Synchronize global settings singleton
             try:
                 from app.config import reload_settings
                 reload_settings()
             except Exception:
                 pass
 
-            if admin_id:
+            mig_req = self.is_migration_required()
+            rst_req = self.is_restart_required()
+
+            if admin_id is not None:
                 await self.repository.log_audit_action(
                     admin_id=admin_id,
                     action="reset_settings",
-                    details=f"Reset settings to .env defaults ({candidate_settings.telegram_api_mode}). Verified as @{me.username}",
+                    details=f"Reset settings to .env defaults ({candidate_settings.telegram_api_mode})."
+                    + (" Migration required" if mig_req else (" Restart required" if rst_req else "")),
                 )
 
-            return True, f"Settings reset to .env defaults!\nMode: {candidate_settings.telegram_api_mode.upper()}\nConnected as: @{me.username}"
+            if mig_req:
+                msg = (
+                    f"Settings reset to .env defaults ({candidate_settings.telegram_api_mode.upper()}).\n\n"
+                    f"⚠️ <b>Telegram Bot API migration required!</b>\n"
+                    f"Current server: <code>{self.running_endpoint}</code>\n"
+                    f"Target server: <code>{self.get_configured_endpoint()}</code>\n\n"
+                    f"<b>Before restarting:</b>\n"
+                    f"1. Stop the bot.\n"
+                    f"2. Call Telegram <code>logOut</code> on old server.\n"
+                    f"3. Start the bot with new endpoint."
+                )
+            elif rst_req:
+                msg = (
+                    f"Settings reset to .env defaults ({candidate_settings.telegram_api_mode.upper()}).\n\n"
+                    f"⚠️ <b>Restart required to apply API server changes.</b>"
+                )
+            else:
+                msg = f"Settings reset to .env defaults ({candidate_settings.telegram_api_mode.upper()})!"
+
+            return True, msg
 

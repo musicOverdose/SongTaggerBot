@@ -80,25 +80,54 @@ async def render_admin_dashboard(
     return text, kb
 
 
-def render_admin_settings(settings: Settings) -> tuple[str, any]:
+def render_admin_settings(
+    settings: Settings,
+    api_mode_manager: Optional[ApiModeManager] = None,
+) -> tuple[str, any]:
     """Builds the Bot Configuration & API settings screen text and keyboard."""
-    mode_badge = "🖥️ <b>Local Server (Centralized)</b>" if settings.is_local_mode else "☁️ <b>Cloud (api.telegram.org)</b>"
+    running_mode = api_mode_manager.get_running_mode() if api_mode_manager else settings.telegram_api_mode
+    running_endpoint = api_mode_manager.get_running_endpoint() if api_mode_manager else settings.effective_api_base_url
+    configured_mode = api_mode_manager.get_configured_mode() if api_mode_manager else ("local" if settings.is_local_mode else "cloud")
+    configured_endpoint = api_mode_manager.get_configured_endpoint() if api_mode_manager else settings.effective_api_base_url
+
+    running_badge = "🖥️ <b>Local Server (Centralized)</b>" if running_mode == "local" else "☁️ <b>Cloud (api.telegram.org)</b>"
     tech_badge = "🟢 Enabled" if settings.show_technical_info else "🔴 Disabled"
     cover_badge = "🟢 Enabled" if settings.send_cover_separately else "🔴 Disabled"
 
+    notice_section = ""
+    if api_mode_manager and api_mode_manager.is_migration_required():
+        notice_section = (
+            "\n\n⚠️ <b>Telegram Bot API Migration Required!</b>\n"
+            f"• <b>Current Server:</b> <code>{running_endpoint}</code>\n"
+            f"• <b>Target Server:</b> <code>{configured_endpoint}</code>\n\n"
+            "<i>Before restarting container:</i>\n"
+            "1. Stop the bot container.\n"
+            "2. Call Telegram <code>logOut</code> through the current/old server.\n"
+            "3. Start the bot with the new endpoint."
+        )
+    elif api_mode_manager and api_mode_manager.is_restart_required():
+        notice_section = (
+            "\n\n⚠️ <b>Restart Required to Apply API Mode!</b>\n"
+            f"• <b>Configured for next start:</b> <b>{configured_mode.upper()}</b> (<code>{configured_endpoint}</code>)\n"
+            "<i>Please restart the container to apply configuration.</i>"
+        )
+
     text = (
         "⚙️ <b>Bot Configuration & API Settings</b>\n\n"
-        f"• <b>API Mode:</b> {mode_badge}\n"
-        f"• <b>Base Endpoint:</b> <code>{settings.effective_api_base_url}</code>\n"
+        f"• <b>Active API Mode:</b> {running_badge}\n"
+        f"• <b>Active Endpoint:</b> <code>{running_endpoint}</code>\n"
+        f"• <b>Configured Mode:</b> <b>{configured_mode.upper()}</b>\n"
+        f"• <b>Configured Endpoint:</b> <code>{configured_endpoint}</code>\n"
         f"• <b>Max File Input:</b> <b>{settings.max_input_mb} MB</b>\n"
         f"• <b>Max File Output:</b> <b>{settings.max_output_mb} MB</b>\n"
         f"• <b>Rate Limit:</b> <b>{settings.rate_limit_uploads_per_minute} uploads/min</b>\n"
         f"• <b>Concurrency:</b> <b>{settings.max_user_concurrent_jobs}/user</b> | <b>{settings.max_global_concurrent_jobs} global</b>\n"
         f"• <b>Technical Specs in Preview:</b> {tech_badge}\n"
-        f"• <b>Send Cover Separately:</b> {cover_badge}\n\n"
-        "<i>Use buttons below to switch API modes, update limits, or toggle UX options in real time.</i>"
+        f"• <b>Send Cover Separately:</b> {cover_badge}"
+        f"{notice_section}\n\n"
+        "<i>Use buttons below to configure API modes, update limits, or toggle UX options.</i>"
     )
-    kb = get_admin_settings_keyboard(settings)
+    kb = get_admin_settings_keyboard(settings, api_mode_manager=api_mode_manager)
     return text, kb
 
 
@@ -973,11 +1002,12 @@ async def callback_adm_bcast_confirm(
 async def callback_adm_settings(
     callback: CallbackQuery,
     settings: Settings,
+    api_mode_manager: Optional[ApiModeManager] = None,
 ) -> None:
     if not is_admin_check(callback, settings):
         await callback.answer("Unauthorized.", show_alert=True)
         return
-    text, kb = render_admin_settings(settings)
+    text, kb = render_admin_settings(settings, api_mode_manager=api_mode_manager)
     if callback.message:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
@@ -998,10 +1028,12 @@ async def callback_adm_set_mode(
     if api_mode_manager is None:
         api_mode_manager = ApiModeManager(callback.bot, settings, repository)
 
-    ok, msg = await api_mode_manager.switch_mode(target_mode, admin_id=callback.from_user.id)
-    await callback.answer(msg, show_alert=True)
-    if ok and callback.message:
-        text, kb = render_admin_settings(settings)
+    ok, msg = await api_mode_manager.configure_mode(target_mode, admin_id=callback.from_user.id)
+    # Strip HTML tags for alert pop-up if needed, or show concise message
+    alert_text = "⚠️ Migration required! See details in settings panel." if api_mode_manager.is_migration_required() else ("⚠️ Restart required to apply changes." if api_mode_manager.is_restart_required() else "Settings updated.")
+    await callback.answer(alert_text, show_alert=True)
+    if callback.message:
+        text, kb = render_admin_settings(settings, api_mode_manager=api_mode_manager)
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
 
@@ -1041,7 +1073,7 @@ async def process_admin_local_url_input(
     url_text = (message.text or "").strip()
     if url_text.lower() in ("/cancel", "cancel"):
         await state.clear()
-        text, kb = render_admin_settings(settings)
+        text, kb = render_admin_settings(settings, api_mode_manager=api_mode_manager)
         await message.answer("Editing cancelled.", reply_markup=kb, parse_mode="HTML")
         return
 
@@ -1050,7 +1082,7 @@ async def process_admin_local_url_input(
 
     ok, status_msg = await api_mode_manager.update_local_url(url_text, admin_id=message.from_user.id)
     await state.clear()
-    text, kb = render_admin_settings(settings)
+    text, kb = render_admin_settings(settings, api_mode_manager=api_mode_manager)
     await message.answer(f"{status_msg}\n\n" + text, reply_markup=kb, parse_mode="HTML")
 
 
@@ -1097,6 +1129,7 @@ async def callback_adm_set_size_preset(
     callback: CallbackQuery,
     settings: Settings,
     repository: DatabaseRepository,
+    api_mode_manager: Optional[ApiModeManager] = None,
 ) -> None:
     if not is_admin_check(callback, settings):
         await callback.answer("Unauthorized.", show_alert=True)
@@ -1119,7 +1152,7 @@ async def callback_adm_set_size_preset(
         details=f"Changed max_{setting_type}_mb to {size_mb} MB",
     )
     await callback.answer(f"Updated Max {setting_type.title()} to {size_mb} MB!", show_alert=True)
-    text, kb = render_admin_settings(settings)
+    text, kb = render_admin_settings(settings, api_mode_manager=api_mode_manager)
     if callback.message:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
@@ -1151,6 +1184,7 @@ async def process_custom_input_mb(
     state: FSMContext,
     settings: Settings,
     repository: DatabaseRepository,
+    api_mode_manager: Optional[ApiModeManager] = None,
 ) -> None:
     if not is_admin_check(message, settings):
         await state.clear()
@@ -1158,7 +1192,7 @@ async def process_custom_input_mb(
     text_val = (message.text or "").strip()
     if text_val.lower() in ("/cancel", "cancel"):
         await state.clear()
-        t, kb = render_admin_settings(settings)
+        t, kb = render_admin_settings(settings, api_mode_manager=api_mode_manager)
         await message.answer("Cancelled.", reply_markup=kb, parse_mode="HTML")
         return
     if not text_val.isdigit() or not (1 <= int(text_val) <= 2000):
@@ -1174,7 +1208,7 @@ async def process_custom_input_mb(
         details=f"Changed max_input_mb to {val} MB",
     )
     await state.clear()
-    t, kb = render_admin_settings(settings)
+    t, kb = render_admin_settings(settings, api_mode_manager=api_mode_manager)
     await message.answer(f"✅ Max Input Size set to {val} MB!\n\n" + t, reply_markup=kb, parse_mode="HTML")
 
 
@@ -1184,6 +1218,7 @@ async def process_custom_output_mb(
     state: FSMContext,
     settings: Settings,
     repository: DatabaseRepository,
+    api_mode_manager: Optional[ApiModeManager] = None,
 ) -> None:
     if not is_admin_check(message, settings):
         await state.clear()
@@ -1191,7 +1226,7 @@ async def process_custom_output_mb(
     text_val = (message.text or "").strip()
     if text_val.lower() in ("/cancel", "cancel"):
         await state.clear()
-        t, kb = render_admin_settings(settings)
+        t, kb = render_admin_settings(settings, api_mode_manager=api_mode_manager)
         await message.answer("Cancelled.", reply_markup=kb, parse_mode="HTML")
         return
     if not text_val.isdigit() or not (1 <= int(text_val) <= 2000):
@@ -1207,7 +1242,7 @@ async def process_custom_output_mb(
         details=f"Changed max_output_mb to {val} MB",
     )
     await state.clear()
-    t, kb = render_admin_settings(settings)
+    t, kb = render_admin_settings(settings, api_mode_manager=api_mode_manager)
     await message.answer(f"✅ Max Output Size set to {val} MB!\n\n" + t, reply_markup=kb, parse_mode="HTML")
 
 
@@ -1216,6 +1251,7 @@ async def callback_adm_set_toggle(
     callback: CallbackQuery,
     settings: Settings,
     repository: DatabaseRepository,
+    api_mode_manager: Optional[ApiModeManager] = None,
 ) -> None:
     if not is_admin_check(callback, settings):
         await callback.answer("Unauthorized.", show_alert=True)
@@ -1241,7 +1277,7 @@ async def callback_adm_set_toggle(
         details=f"Toggled {label} -> {'ON' if new_val else 'OFF'}",
     )
     await callback.answer(f"{label} is now {'ON' if new_val else 'OFF'}!")
-    t, kb = render_admin_settings(settings)
+    t, kb = render_admin_settings(settings, api_mode_manager=api_mode_manager)
     if callback.message:
         await callback.message.edit_text(t, reply_markup=kb, parse_mode="HTML")
 
@@ -1261,7 +1297,8 @@ async def callback_adm_set_reset(
         api_mode_manager = ApiModeManager(callback.bot, settings, repository)
 
     ok, msg = await api_mode_manager.reset_to_env_defaults(admin_id=callback.from_user.id)
-    await callback.answer(msg, show_alert=True)
-    t, kb = render_admin_settings(settings)
+    alert_text = "⚠️ Migration required! See details in settings panel." if api_mode_manager.is_migration_required() else ("⚠️ Restart required to apply changes." if api_mode_manager.is_restart_required() else "Settings reset to defaults.")
+    await callback.answer(alert_text, show_alert=True)
+    t, kb = render_admin_settings(settings, api_mode_manager=api_mode_manager)
     if callback.message:
         await callback.message.edit_text(t, reply_markup=kb, parse_mode="HTML")

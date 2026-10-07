@@ -8,6 +8,7 @@ import sys
 from app.config import get_settings
 from app.database.connection import Database
 from app.database.repository import DatabaseRepository
+from app.services.api_mode_manager import ApiModeManager
 from app.services.job_manager import JobManager
 
 
@@ -181,55 +182,49 @@ def cmd_cleanup(settings):
 
 
 async def cmd_api_mode(repo: DatabaseRepository, settings, action: str, url: str = None):
+    # Base environment values represent the baseline running server
+    env_baseline_mode = settings.telegram_api_mode
+    env_baseline_url = settings.effective_api_base_url
+
+    # Apply DB overrides to reflect configured state
     db_mode = await repo.get_system_setting("telegram_api_mode", "")
+    if db_mode:
+        settings.telegram_api_mode = db_mode
     db_url = await repo.get_system_setting("telegram_api_base_url", "")
-    current_mode = db_mode or settings.telegram_api_mode
-    current_url = db_url or settings.effective_api_base_url
+    if db_url:
+        settings.telegram_api_base_url = db_url
+
+    manager = ApiModeManager(
+        bot=None,
+        settings=settings,
+        repository=repo,
+        running_mode=env_baseline_mode,
+        running_endpoint=env_baseline_url,
+    )
 
     if action == "status":
-        print("=" * 50)
+        print("=" * 60)
         print("Telegram Bot API Mode & Connectivity:")
-        print(f"Active Mode:          {current_mode.upper()}")
-        print(f"Base Endpoint:        {current_url}")
-        print(f"Env Mode:             {settings.telegram_api_mode}")
+        print(f"Running Baseline:     {env_baseline_mode.upper()} ({env_baseline_url})")
+        print(f"Configured Mode:      {manager.get_configured_mode().upper()}")
+        print(f"Configured Endpoint:  {manager.get_configured_endpoint()}")
         print(f"DB Override Mode:     {db_mode or 'None (using env)'}")
-        print("=" * 50)
+        print(f"Restart Required:     {'YES' if manager.is_restart_required() else 'NO'}")
+        print(f"Migration Required:   {'YES' if manager.is_migration_required() else 'NO'}")
+        if manager.is_migration_required():
+            print("-" * 60)
+            print(manager.get_migration_instructions_text())
+        print("=" * 60)
         return
 
     if action == "cloud":
-        await repo.set_system_setting("telegram_api_mode", "cloud")
-        cur_in = int(await repo.get_system_setting("max_input_mb", str(settings.max_input_mb)) or settings.max_input_mb)
-        if cur_in > 20:
-            await repo.set_system_setting("max_input_mb", "20")
-        cur_out = int(await repo.get_system_setting("max_output_mb", str(settings.max_output_mb)) or settings.max_output_mb)
-        if cur_out > 50:
-            await repo.set_system_setting("max_output_mb", "50")
-        await repo.log_audit_action(
-            admin_id=0,
-            action="switch_api_mode",
-            details="CLI switched to Cloud Mode (https://api.telegram.org)",
-        )
-        print("Successfully switched to CLOUD MODE (https://api.telegram.org).")
+        ok, msg = await manager.configure_mode("cloud", admin_id=0)
+        print(f"Result: {msg}")
         return
 
     if action == "local":
-        target_url = (url or db_url or settings.telegram_api_base_url).strip().rstrip("/")
-        if not target_url or target_url == "https://api.telegram.org":
-            target_url = "http://telegram-bot-api:8081"
-        await repo.set_system_setting("telegram_api_mode", "local")
-        await repo.set_system_setting("telegram_api_base_url", target_url)
-        cur_in = int(await repo.get_system_setting("max_input_mb", str(settings.max_input_mb)) or settings.max_input_mb)
-        if cur_in <= 20:
-            await repo.set_system_setting("max_input_mb", "2000")
-        cur_out = int(await repo.get_system_setting("max_output_mb", str(settings.max_output_mb)) or settings.max_output_mb)
-        if cur_out <= 50:
-            await repo.set_system_setting("max_output_mb", "2000")
-        await repo.log_audit_action(
-            admin_id=0,
-            action="switch_api_mode",
-            details=f"CLI switched to Local Mode ({target_url})",
-        )
-        print(f"Successfully switched to LOCAL MODE ({target_url}).")
+        ok, msg = await manager.configure_mode("local", new_base_url=url, admin_id=0)
+        print(f"Result: {msg}")
         return
 
 

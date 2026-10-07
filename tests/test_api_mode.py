@@ -88,74 +88,92 @@ def test_centralized_server_uses_is_local_false():
 
 
 # ==============================================================================
-# 3. ApiModeManager Safe Runtime Switching & getMe Verification Tests
+# 3. ApiModeManager Controlled Configuration & Migration Requirement Tests
 # ==============================================================================
 
 @pytest.mark.asyncio
-async def test_runtime_api_switching_success(test_repo: DatabaseRepository):
+async def test_configure_mode_persists_without_mutating_bot_session_api(test_repo: DatabaseRepository):
+    """
+    Changing mode must persist target configuration to database and in-memory settings,
+    but MUST NEVER dynamically mutate bot.session.api on the live running instance.
+    """
     settings = Settings(bot_token="test_token", telegram_api_mode="cloud")
     mock_bot = MagicMock()
     mock_bot.session.api = PRODUCTION
 
-    # Mock get_me returning bot info
-    mock_bot_user = User(id=123, is_bot=True, first_name="TestBot", username="SongTaggerTestBot")
-    mock_bot.get_me = AsyncMock(return_value=mock_bot_user)
+    manager = ApiModeManager(
+        bot=mock_bot,
+        settings=settings,
+        repository=test_repo,
+        running_mode="cloud",
+        running_endpoint="https://api.telegram.org",
+    )
 
-    manager = ApiModeManager(bot=mock_bot, settings=settings, repository=test_repo)
-
-    # Switch from cloud to local
-    ok, msg = await manager.switch_mode("local", "http://telegram-bot-api:8081", admin_id=1001)
+    # Configure local mode
+    ok, msg = await manager.configure_mode("local", "http://telegram-bot-api:8081", admin_id=1001)
     assert ok is True
-    assert "LOCAL mode" in msg
+    assert "Telegram Bot API migration required" in msg
+    assert "logOut" in msg
+
+    # Settings and database MUST be updated
     assert settings.telegram_api_mode == "local"
     assert settings.is_local_mode is True
     assert settings.effective_api_base_url == "http://telegram-bot-api:8081"
-    assert mock_bot.session.api.is_local is False
-    assert "http://telegram-bot-api:8081" in mock_bot.session.api.base
-
-    # Check database persistence
     saved_mode = await test_repo.get_system_setting("telegram_api_mode")
     assert saved_mode == "local"
+    saved_url = await test_repo.get_system_setting("telegram_api_base_url")
+    assert saved_url == "http://telegram-bot-api:8081"
 
-    # Check audit log
-    logs, total = await test_repo.get_audit_logs(limit=1)
+    # CRITICAL: bot.session.api must NOT be mutated on the running bot!
+    assert mock_bot.session.api == PRODUCTION
+
+    # Audit log recorded with migration notice
+    logs, _ = await test_repo.get_audit_logs(limit=1)
     assert len(logs) == 1
-    assert logs[0].action == "switch_api_mode"
-    assert "SongTaggerTestBot" in logs[0].details
-
-    # Switch back to cloud
-    ok_cloud, msg_cloud = await manager.switch_mode("cloud", admin_id=1001)
-    assert ok_cloud is True
-    assert settings.is_local_mode is False
-    assert settings.effective_api_base_url == "https://api.telegram.org"
-    assert mock_bot.session.api == PRODUCTION
+    assert logs[0].action == "configure_api_mode"
+    assert "Migration required" in logs[0].details
 
 
-@pytest.mark.asyncio
-async def test_runtime_api_switching_rollback_on_getme_failure(test_repo: DatabaseRepository):
-    """If get_me fails during mode switch, roll back to previous API configuration."""
+def test_restart_required_vs_migration_required_state_logic(test_repo: DatabaseRepository):
+    """
+    Verify distinct evaluation of is_restart_required() and is_migration_required().
+    """
     settings = Settings(bot_token="test_token", telegram_api_mode="cloud")
-    mock_bot = MagicMock()
-    mock_bot.session.api = PRODUCTION
+    manager = ApiModeManager(
+        bot=None,
+        settings=settings,
+        repository=test_repo,
+        running_mode="cloud",
+        running_endpoint="https://api.telegram.org",
+    )
 
-    # Mock get_me throwing connection error
-    mock_bot.get_me = AsyncMock(side_effect=ConnectionError("Host unreachable: telegram-bot-api:8081"))
+    # 1. Initially matching: neither restart nor migration required
+    assert manager.is_restart_required() is False
+    assert manager.is_migration_required() is False
 
-    manager = ApiModeManager(bot=mock_bot, settings=settings, repository=test_repo)
+    # 2. Configured changed to local: both restart and migration required
+    settings.telegram_api_mode = "local"
+    settings.telegram_api_base_url = "http://telegram-bot-api:8081"
+    assert manager.is_restart_required() is True
+    assert manager.is_migration_required() is True
+    assert "logOut" in manager.get_migration_instructions()
+    assert "logOut" in manager.get_migration_instructions_text()
 
-    ok, msg = await manager.switch_mode("local", "http://telegram-bot-api:8081", admin_id=1001)
-    assert ok is False
-    assert "Connection verification failed" in msg
-    assert "Rolled back" in msg
+    # 3. Simulated boot with local mode: running matches configured
+    local_mgr = ApiModeManager(
+        bot=None,
+        settings=settings,
+        repository=test_repo,
+        running_mode="local",
+        running_endpoint="http://telegram-bot-api:8081",
+    )
+    assert local_mgr.is_restart_required() is False
+    assert local_mgr.is_migration_required() is False
 
-    # State must remain unchanged
-    assert settings.telegram_api_mode == "cloud"
-    assert settings.is_local_mode is False
-    assert mock_bot.session.api == PRODUCTION
-
-    # No 'local' mode persisted in DB
-    db_mode = await test_repo.get_system_setting("telegram_api_mode", "")
-    assert db_mode != "local"
+    # 4. Local bot configured with a different local endpoint: migration required
+    settings.telegram_api_base_url = "http://other-local-api:8081"
+    assert local_mgr.is_restart_required() is True
+    assert local_mgr.is_migration_required() is True
 
 
 def test_invalid_local_url_handling():
@@ -204,9 +222,26 @@ async def test_settings_persistence_across_startup(test_repo: DatabaseRepository
 @pytest.mark.asyncio
 async def test_admin_settings_rendering_and_mode_switch(test_repo: DatabaseRepository):
     settings = Settings(bot_token="test_token", admin_ids=[1001])
-    text, kb = render_admin_settings(settings)
+    api_mgr = ApiModeManager(
+        bot=None,
+        settings=settings,
+        repository=test_repo,
+        running_mode="cloud",
+        running_endpoint="https://api.telegram.org",
+    )
+
+    # 1. Matching running and configured: no migration notice
+    text, kb = render_admin_settings(settings, api_mode_manager=api_mgr)
     assert "Bot Configuration & API Settings" in text
-    assert "Cloud" in text
+    assert "Active API Mode:" in text
+    assert "Telegram Bot API Migration Required" not in text
+
+    # 2. Configured changed to local: displays migration notice
+    settings.telegram_api_mode = "local"
+    settings.telegram_api_base_url = "http://telegram-bot-api:8081"
+    text_mig, _ = render_admin_settings(settings, api_mode_manager=api_mgr)
+    assert "Telegram Bot API Migration Required" in text_mig
+    assert "Call Telegram <code>logOut</code>" in text_mig
 
     # Test dashboard rendering includes API mode
     dash_text, dash_kb = await render_admin_dashboard(settings, test_repo)
@@ -219,25 +254,23 @@ async def test_admin_settings_rendering_and_mode_switch(test_repo: DatabaseRepos
     cb.message.edit_text = AsyncMock()
     cb.answer = AsyncMock()
 
-    await callback_adm_settings(cb, settings)
+    await callback_adm_settings(cb, settings, api_mode_manager=api_mgr)
     cb.message.edit_text.assert_called_once()
     assert "Bot Configuration & API Settings" in cb.message.edit_text.call_args[0][0]
 
-    # Test mode toggle via callback_adm_set_mode
+    # Test mode configuration via callback_adm_set_mode
     cb.data = "adm_set_mode:local"
     cb.bot = MagicMock()
     cb.bot.session.api = PRODUCTION
-    mock_bot_user = User(id=10, is_bot=True, first_name="Tagger", username="TaggerBot")
-    cb.bot.get_me = AsyncMock(return_value=mock_bot_user)
 
-    api_mgr = ApiModeManager(cb.bot, settings, test_repo)
     await callback_adm_set_mode(cb, settings, test_repo, api_mode_manager=api_mgr)
     assert settings.is_local_mode is True
+    assert cb.bot.session.api == PRODUCTION  # Must NOT mutate live session
 
     # Test feature toggle (Technical specs)
     cb.data = "adm_set_toggle:tech"
     initial_tech = settings.show_technical_info
-    await callback_adm_set_toggle(cb, settings, test_repo)
+    await callback_adm_set_toggle(cb, settings, test_repo, api_mode_manager=api_mgr)
     assert settings.show_technical_info is not initial_tech
 
 
@@ -291,8 +324,11 @@ def test_portainer_environment_configuration_in_compose():
 
 
 @pytest.mark.asyncio
-async def test_reset_to_env_defaults_rollback_on_getme_failure(test_repo: DatabaseRepository):
-    """Transactional reset: If getMe fails during reset, previous configuration and DB overrides are retained."""
+async def test_reset_to_env_defaults_clears_db_and_updates_restart_state(test_repo: DatabaseRepository):
+    """
+    Resetting to defaults clears database overrides and detects if a restart/migration
+    is needed without touching live bot session.
+    """
     settings = Settings(
         bot_token="test_token",
         telegram_api_mode="local",
@@ -303,63 +339,40 @@ async def test_reset_to_env_defaults_rollback_on_getme_failure(test_repo: Databa
     mock_bot = MagicMock()
     mock_bot.session.api = TelegramAPIServer.from_base("http://local-stack:8081", is_local=False)
 
-    # Put overrides in database
+    # Set overrides in database
     await test_repo.set_system_setting("telegram_api_mode", "local")
     await test_repo.set_system_setting("telegram_api_base_url", "http://local-stack:8081")
     await test_repo.set_system_setting("max_input_mb", "500")
     await test_repo.set_system_setting("max_output_mb", "1000")
 
-    # Simulate get_me failing during reset
-    mock_bot.get_me = AsyncMock(side_effect=ConnectionError("Cannot reach official Telegram API"))
-
-    manager = ApiModeManager(bot=mock_bot, settings=settings, repository=test_repo)
+    manager = ApiModeManager(
+        bot=mock_bot,
+        settings=settings,
+        repository=test_repo,
+        running_mode="local",
+        running_endpoint="http://local-stack:8081",
+    )
 
     ok, msg = await manager.reset_to_env_defaults(admin_id=1001)
+    assert ok is True
+    assert "Settings reset to .env defaults" in msg
 
-    # Must report failure and mention rollback
-    assert ok is False
-    assert "Connection verification failed during reset" in msg
-    assert "Previous configuration retained" in msg
-
-    # Session API must remain unchanged
-    assert mock_bot.session.api.is_local is False
-    assert "http://local-stack:8081" in mock_bot.session.api.base
-
-    # In-memory settings must remain completely unchanged
-    assert settings.telegram_api_mode == "local"
-    assert settings.telegram_api_base_url == "http://local-stack:8081"
-    assert settings.max_input_mb == 500
-    assert settings.max_output_mb == 1000
-
-    # DB overrides must NOT be cleared
-    saved_mode = await test_repo.get_system_setting("telegram_api_mode")
-    assert saved_mode == "local"
-    saved_url = await test_repo.get_system_setting("telegram_api_base_url")
-    assert saved_url == "http://local-stack:8081"
-    assert await test_repo.get_system_setting("max_input_mb") == "500"
-    assert await test_repo.get_system_setting("max_output_mb") == "1000"
-
-    # Audit logs must NOT record a reset_settings entry on failure
-    logs, total = await test_repo.get_audit_logs(limit=10)
-    reset_logs = [l for l in logs if l.action == "reset_settings"]
-    assert len(reset_logs) == 0
-
-    # Now verify that when get_me succeeds, reset commits cleanly
-    mock_user = User(id=42, is_bot=True, first_name="Tagger", username="TaggerBot")
-    mock_bot.get_me = AsyncMock(return_value=mock_user)
-
-    ok_succ, msg_succ = await manager.reset_to_env_defaults(admin_id=1001)
-    assert ok_succ is True
-    assert "Settings reset to .env defaults" in msg_succ
-
-    # DB overrides must now be cleared
+    # Database overrides must be cleared
     assert await test_repo.get_system_setting("telegram_api_mode") == ""
     assert await test_repo.get_system_setting("telegram_api_base_url") == ""
     assert await test_repo.get_system_setting("max_input_mb") == ""
     assert await test_repo.get_system_setting("max_output_mb") == ""
 
-    # Audit log must be recorded
-    logs_after, _ = await test_repo.get_audit_logs(limit=10)
-    reset_logs_after = [l for l in logs_after if l.action == "reset_settings"]
-    assert len(reset_logs_after) == 1
+    # Live session must NOT be mutated
+    assert mock_bot.session.api.is_local is False
+    assert "http://local-stack:8081" in mock_bot.session.api.base
+
+    # Configured is now cloud (from .env default), but running is local -> migration required!
+    assert manager.is_migration_required() is True
+    assert manager.is_restart_required() is True
+
+    # Audit log recorded
+    logs, _ = await test_repo.get_audit_logs(limit=1)
+    assert len(logs) == 1
+    assert logs[0].action == "reset_settings"
 

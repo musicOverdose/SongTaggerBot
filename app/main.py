@@ -155,6 +155,8 @@ async def main():
         bot=bot,
         settings=settings,
         repository=repository,
+        running_mode=settings.telegram_api_mode,
+        running_endpoint=settings.effective_api_base_url,
     )
 
     # Dispatcher & FSM Memory Storage

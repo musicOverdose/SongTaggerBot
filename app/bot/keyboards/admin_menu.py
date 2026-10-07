@@ -1,6 +1,6 @@
 """Interactive keyboards for the Telegram Admin Panel."""
 
-from typing import List
+from typing import Any, List, Optional
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.config import Settings
@@ -145,10 +145,14 @@ def get_admin_back_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_admin_settings_keyboard(settings: Settings) -> InlineKeyboardMarkup:
+def get_admin_settings_keyboard(settings: Settings, api_mode_manager: Optional[Any] = None) -> InlineKeyboardMarkup:
     """Settings menu keyboard showing API mode, limits, and UX toggles."""
-    is_local = settings.is_local_mode
-    mode_btn_text = "☁️ Switch to Cloud Mode" if is_local else "🖥️ Switch to Local Mode"
+    if api_mode_manager is not None and hasattr(api_mode_manager, "get_configured_mode"):
+        is_local = api_mode_manager.get_configured_mode() == "local"
+    else:
+        is_local = settings.is_local_mode
+
+    mode_btn_text = "☁️ Configure Cloud Mode" if is_local else "🖥️ Configure Local Mode"
     target_mode = "cloud" if is_local else "local"
 
     tech_icon = "🟢" if settings.show_technical_info else "🔴"
