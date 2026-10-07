@@ -255,3 +255,79 @@ def test_compose_yaml_external_network():
     assert "telegram-bots" in content
     assert "external: true" in content
     assert "- telegram-bots" in content
+
+
+def test_portainer_environment_configuration_in_compose():
+    """Verify compose files pass variables through environment block and do not use env_file."""
+    for filename in ("compose.yaml", "docker-compose.yml"):
+        path = Path(f"/home/farzad/metadataeditor/{filename}")
+        assert path.exists(), f"{filename} must exist"
+        content = path.read_text()
+
+        # Must NOT depend on env_file: .env (Portainer compatibility)
+        assert "env_file:" not in content, f"{filename} should not have env_file"
+        assert ".env" not in content, f"{filename} should not reference .env"
+
+        # Must have environment block with Portainer interpolation
+        assert "environment:" in content, f"{filename} must have environment block"
+        assert "BOT_TOKEN: ${BOT_TOKEN}" in content
+        assert "ADMIN_IDS: ${ADMIN_IDS" in content
+        assert "TELEGRAM_API_MODE: ${TELEGRAM_API_MODE" in content
+        assert "TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL" in content
+        assert "MAX_INPUT_MB: ${MAX_INPUT_MB" in content
+        assert "MAX_OUTPUT_MB: ${MAX_OUTPUT_MB" in content
+
+
+@pytest.mark.asyncio
+async def test_reset_to_env_defaults_rollback_on_getme_failure(test_repo: DatabaseRepository):
+    """Transactional reset: If getMe fails during reset, previous configuration and DB overrides are retained."""
+    settings = Settings(bot_token="test_token", telegram_api_mode="local", telegram_api_base_url="http://local-stack:8081")
+    mock_bot = MagicMock()
+    mock_bot.session.api = TelegramAPIServer.from_base("http://local-stack:8081", is_local=False)
+
+    # Put overrides in database
+    await test_repo.set_system_setting("telegram_api_mode", "local")
+    await test_repo.set_system_setting("telegram_api_base_url", "http://local-stack:8081")
+
+    # Simulate get_me failing during reset
+    mock_bot.get_me = AsyncMock(side_effect=ConnectionError("Cannot reach official Telegram API"))
+
+    manager = ApiModeManager(bot=mock_bot, settings=settings, repository=test_repo)
+
+    ok, msg = await manager.reset_to_env_defaults(admin_id=1001)
+
+    # Must report failure and mention rollback
+    assert ok is False
+    assert "Connection verification failed during reset" in msg
+    assert "Previous configuration retained" in msg
+
+    # Session API must remain unchanged
+    assert mock_bot.session.api.is_local is False
+    assert "http://local-stack:8081" in mock_bot.session.api.base
+
+    # DB overrides must NOT be cleared
+    saved_mode = await test_repo.get_system_setting("telegram_api_mode")
+    assert saved_mode == "local"
+    saved_url = await test_repo.get_system_setting("telegram_api_base_url")
+    assert saved_url == "http://local-stack:8081"
+
+    # Audit logs must NOT record a reset_settings entry on failure
+    logs, total = await test_repo.get_audit_logs(limit=10)
+    reset_logs = [l for l in logs if l.action == "reset_settings"]
+    assert len(reset_logs) == 0
+
+    # Now verify that when get_me succeeds, reset commits cleanly
+    mock_user = User(id=42, is_bot=True, first_name="Tagger", username="TaggerBot")
+    mock_bot.get_me = AsyncMock(return_value=mock_user)
+
+    ok_succ, msg_succ = await manager.reset_to_env_defaults(admin_id=1001)
+    assert ok_succ is True
+    assert "Settings reset to .env defaults" in msg_succ
+
+    # DB overrides must now be cleared
+    assert await test_repo.get_system_setting("telegram_api_mode") == ""
+
+    # Audit log must be recorded
+    logs_after, _ = await test_repo.get_audit_logs(limit=10)
+    reset_logs_after = [l for l in logs_after if l.action == "reset_settings"]
+    assert len(reset_logs_after) == 1

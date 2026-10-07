@@ -5,8 +5,27 @@ services:
       dockerfile: Dockerfile
     container_name: songtagger-bot
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      ADMIN_IDS: ${ADMIN_IDS:-}
+      TELEGRAM_API_MODE: ${TELEGRAM_API_MODE:-cloud}
+      TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
+      MAX_INPUT_MB: ${MAX_INPUT_MB:-20}
+      MAX_OUTPUT_MB: ${MAX_OUTPUT_MB:-50}
+      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-2}
+      MAX_USER_CONCURRENT_JOBS: ${MAX_USER_CONCURRENT_JOBS:-1}
+      MAX_GLOBAL_CONCURRENT_JOBS: ${MAX_GLOBAL_CONCURRENT_JOBS:-10}
+      RATE_LIMIT_UPLOADS_PER_MINUTE: ${RATE_LIMIT_UPLOADS_PER_MINUTE:-5}
+      JOB_TTL_MINUTES: ${JOB_TTL_MINUTES:-30}
+      FFMPEG_TIMEOUT_SECONDS: ${FFMPEG_TIMEOUT_SECONDS:-120}
+      FFPROBE_TIMEOUT_SECONDS: ${FFPROBE_TIMEOUT_SECONDS:-30}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+      DATA_DIR: ${DATA_DIR:-/data}
+      TEMP_DIR: ${TEMP_DIR:-/tmp/audio-bot}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SHOW_TECHNICAL_INFO: ${SHOW_TECHNICAL_INFO:-true}
+      SEND_COVER_SEPARATELY: ${SEND_COVER_SEPARATELY:-false}
+      DEFAULT_FILENAME_FORMAT: ${DEFAULT_FILENAME_FORMAT:-{track:02} - {title}}
     volumes:
       - ./data:/data
     tmpfs:
