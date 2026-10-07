@@ -27,7 +27,11 @@ ALLOWED_PLACEHOLDERS = {"first_name", "username", "user_id", "bot_name"}
 
 # Default Built-In Templates
 DEFAULT_WELCOME_MESSAGE = "Welcome {first_name}! Send an audio file to start editing tags."
-DEFAULT_MUST_JOIN_MESSAGE = "Please join our channel to use this bot."
+DEFAULT_MUST_JOIN_MESSAGE = (
+    "👋 Hello <b>{first_name}</b>!\n\n"
+    "Please join our channel(s) below to use <b>SongTaggerBot</b>.\n"
+    "After joining, tap <b>🔄 I've joined</b> to start using the bot!"
+)
 DEFAULT_HELP_MESSAGE = "Send an audio file to view and edit its metadata tags."
 
 MESSAGE_DEFAULTS = {

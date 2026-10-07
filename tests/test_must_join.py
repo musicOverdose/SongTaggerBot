@@ -109,3 +109,67 @@ async def test_middleware_access_control(test_repo: DatabaseRepository):
     mock_event.reply.assert_called_once()
     assert "join our channel" in mock_event.reply.call_args[0][0].lower()
 
+
+@pytest.mark.asyncio
+async def test_must_join_immediate_on_start_and_verify_welcome(test_repo: DatabaseRepository):
+    from app.bot.middleware.must_join_middleware import MustJoinMiddleware
+    from app.bot.handlers.common import callback_must_join_verify
+    from app.services.message_service import MessageService
+    from app.config import Settings
+    from aiogram.types import Message, CallbackQuery
+
+    service = MustJoinService(test_repo)
+    msg_service = MessageService(test_repo)
+    middleware = MustJoinMiddleware(service, msg_service)
+    await test_repo.add_channel("@musicchannel", title="Music Channel", username="musicchannel")
+
+    settings = Settings(bot_token="test", admin_ids=[999])
+    mock_bot = MagicMock()
+    # User is not a member initially
+    mock_bot.get_chat_member = AsyncMock(return_value=MagicMock(status=ChatMemberStatus.LEFT))
+
+    handler_called = False
+    async def dummy_start_handler(event, data):
+        nonlocal handler_called
+        handler_called = True
+        return "STARTED"
+
+    # 1. Unjoined user sends /start -> Middleware blocks and prompts must-join immediately!
+    start_msg = MagicMock(spec=Message)
+    start_msg.text = "/start"
+    start_msg.reply = AsyncMock()
+
+    user = MagicMock(id=12345, is_bot=False, first_name="John")
+    data = {
+        "event_from_user": user,
+        "bot": mock_bot,
+        "settings": settings,
+    }
+
+    result = await middleware(dummy_start_handler, start_msg, data)
+    assert result is None
+    assert handler_called is False
+    start_msg.reply.assert_called_once()
+    prompt_text = start_msg.reply.call_args[0][0]
+    assert "join our channel" in prompt_text.lower()
+
+    # 2. User joins the channel and taps "I've joined" (must_join_verify)
+    mock_bot.get_chat_member = AsyncMock(return_value=MagicMock(status=ChatMemberStatus.MEMBER))
+
+    cb = MagicMock(spec=CallbackQuery)
+    cb.data = "must_join_verify"
+    cb.from_user = user
+    cb.bot = mock_bot
+    cb.answer = AsyncMock()
+    cb.message = MagicMock()
+    cb.message.edit_text = AsyncMock()
+
+    await callback_must_join_verify(cb, service, msg_service)
+    cb.answer.assert_called_once()
+    assert "confirmed" in cb.answer.call_args[0][0].lower()
+    cb.message.edit_text.assert_called_once()
+    verified_text = cb.message.edit_text.call_args[0][0]
+    assert "Membership Verified" in verified_text
+    assert "Welcome John!" in verified_text
+
+

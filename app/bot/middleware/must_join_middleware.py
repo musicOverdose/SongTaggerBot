@@ -56,12 +56,7 @@ class MustJoinMiddleware(BaseMiddleware):
         if await repo.is_whitelisted(user.id):
             return await handler(event, data)
 
-        # Allow /start, /help, and must_join_verify callback
-        if isinstance(event, Message) and event.text:
-            cmd = event.text.split()[0].lower()
-            if cmd in ("/start", "/help"):
-                return await handler(event, data)
-
+        # Allow must_join_verify callback to be processed by its handler
         if isinstance(event, CallbackQuery) and event.data == "must_join_verify":
             return await handler(event, data)
 

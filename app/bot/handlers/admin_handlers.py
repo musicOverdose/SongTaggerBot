@@ -4,11 +4,12 @@ import asyncio
 import logging
 from typing import List, Optional, Union
 from aiogram import F, Router
+from aiogram.enums import ChatMemberStatus
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.database.models import BannedUser, WhitelistedUser
+from app.database.models import BannedUser, RequiredChannel, WhitelistedUser
 
 from app.bot.keyboards.admin_menu import (
     get_admin_audit_logs_keyboard,
@@ -429,20 +430,158 @@ async def cmd_channels(message: Message, settings: Settings, repository: Databas
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
+# --- Required Broadcast Channels Management ---
+
+def _render_channels_text(channels: List[RequiredChannel]) -> str:
+    lines = [
+        "📢 <b>Must-Join Channels Management</b>\n",
+        "Users are required to join these channels before they can use the bot.\n"
+        "Ensure the bot is added as an <b>Administrator</b> in every channel.\n",
+    ]
+    if channels:
+        lines.append("<b>Configured Channels:</b>")
+        for c in channels:
+            title_display = f"<b>{c.title}</b>" if c.title else f"<b>{c.channel_id}</b>"
+            user_part = f"@{c.username} • " if c.username else ""
+            status_badge = "🟢 <b>Active</b>" if c.is_enabled else "🔴 <b>Disabled</b>"
+            lines.append(f"• {title_display} ({user_part}<code>{c.channel_id}</code>) — {status_badge}")
+        active_cnt = sum(1 for c in channels if c.is_enabled)
+        lines.append(f"\nTotal channels: <b>{len(channels)}</b> (<b>{active_cnt}</b> active)")
+    else:
+        lines.append("<i>No required channels configured. Must-join is currently bypassed.</i>")
+    return "\n".join(lines)
+
+
+async def _resolve_and_add_channel(
+    bot, repository: DatabaseRepository, channel_input: str
+) -> tuple[bool, str, Optional[str], Optional[str], Optional[str], bool]:
+    """Resolves Telegram channel metadata and stores in database."""
+    target_id = channel_input.strip()
+    if target_id.startswith("https://t.me/"):
+        target_id = "@" + target_id.split("https://t.me/")[1].split("/")[0].lstrip("+")
+
+    chat = None
+    is_bot_admin = False
+    try:
+        chat_arg = int(target_id) if (target_id.startswith("-") or target_id.isdigit()) else target_id
+        chat = await bot.get_chat(chat_arg)
+    except Exception as e:
+        logger.debug(f"Could not get chat info directly for {target_id}: {e}")
+
+    channel_id = str(chat.id) if chat else target_id
+    username = chat.username if chat and chat.username else (target_id.lstrip("@") if target_id.startswith("@") else None)
+    title = chat.title if chat and chat.title else (f"@{username}" if username else channel_id)
+    invite_link = None
+
+    if chat:
+        invite_link = chat.invite_link
+        if not invite_link and chat.username:
+            invite_link = f"https://t.me/{chat.username}"
+
+        try:
+            member = await bot.get_chat_member(chat_id=chat.id, user_id=bot.id)
+            is_bot_admin = member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR)
+            if is_bot_admin and not invite_link:
+                try:
+                    invite_link = await bot.export_chat_invite_link(chat.id)
+                except Exception:
+                    pass
+        except Exception:
+            is_bot_admin = False
+
+    success = await repository.add_channel(
+        channel_id=channel_id,
+        username=username,
+        title=title,
+        invite_link=invite_link,
+    )
+    return success, channel_id, username, title, invite_link, is_bot_admin
+
+
 @router.callback_query(F.data == "adm_channels")
 async def callback_adm_channels(callback: CallbackQuery, settings: Settings, repository: DatabaseRepository) -> None:
     if not is_admin_check(callback, settings):
         await callback.answer("Unauthorized.", show_alert=True)
         return
     channels = await repository.list_channels()
-    text = (
-        "📢 <b>Must-Join Channels Management</b>\n\n"
-        "Tap a channel to toggle between 🟢 Enabled and 🔴 Disabled, or tap 🗑 Delete to remove."
-    )
+    text = _render_channels_text(channels)
     kb = get_admin_channels_keyboard(channels)
     if callback.message:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm_ch_info:"))
+async def callback_adm_ch_info(callback: CallbackQuery, settings: Settings, repository: DatabaseRepository) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+    channel_id = callback.data.split(":", 1)[1]
+    channels = await repository.list_channels()
+    target = next((c for c in channels if c.channel_id == channel_id), None)
+    if not target:
+        await callback.answer("Channel not found.", show_alert=True)
+        return
+
+    bot_status = "Unknown"
+    try:
+        chat_arg = int(target.channel_id) if (target.channel_id.startswith("-") or target.channel_id.isdigit()) else (f"@{target.username}" if target.username else target.channel_id)
+        member = await callback.bot.get_chat_member(chat_id=chat_arg, user_id=callback.bot.id)
+        if member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+            bot_status = "🟢 Administrator (Active)"
+        else:
+            bot_status = f"🔴 {member.status.capitalize()} (Admin needed!)"
+    except Exception:
+        bot_status = "⚠️ Inaccessible (Promote bot to Admin)"
+
+    title_str = target.title or "(No title set)"
+    username_str = f"@{target.username}" if target.username else "(Private)"
+    link_str = target.invite_link or "(None set)"
+    status_str = "🟢 Enabled (Active)" if target.is_enabled else "🔴 Disabled"
+    added_str = target.created_at[:19].replace("T", " ") if target.created_at else "Unknown"
+
+    info_text = (
+        f"📢 Channel Information\n\n"
+        f"🏷 Title: {title_str}\n"
+        f"🆔 ID: {target.channel_id}\n"
+        f"👤 Username: {username_str}\n"
+        f"🔗 Link: {link_str}\n"
+        f"⚡ Status: {status_str}\n"
+        f"🤖 Bot Rights: {bot_status}\n"
+        f"📅 Added: {added_str} UTC"
+    )
+    await callback.answer(info_text, show_alert=True)
+
+
+@router.callback_query(F.data == "adm_ch_sync")
+async def callback_adm_ch_sync(callback: CallbackQuery, settings: Settings, repository: DatabaseRepository) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+    channels = await repository.list_channels()
+    synced_count = 0
+    for c in channels:
+        try:
+            chat_arg = int(c.channel_id) if (c.channel_id.startswith("-") or c.channel_id.isdigit()) else (f"@{c.username}" if c.username else c.channel_id)
+            chat = await callback.bot.get_chat(chat_arg)
+            if chat:
+                invite_link = c.invite_link or chat.invite_link or (f"https://t.me/{chat.username}" if chat.username else None)
+                await repository.add_channel(
+                    channel_id=c.channel_id,
+                    username=chat.username or c.username,
+                    title=chat.title or c.title,
+                    invite_link=invite_link,
+                )
+                synced_count += 1
+        except Exception:
+            pass
+
+    channels = await repository.list_channels()
+    text = _render_channels_text(channels)
+    kb = get_admin_channels_keyboard(channels)
+    await callback.answer(f"✅ Synced {synced_count}/{len(channels)} channels from Telegram!", show_alert=True)
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("adm_ch_toggle:"))
@@ -464,9 +603,10 @@ async def callback_adm_ch_toggle(callback: CallbackQuery, settings: Settings, re
         )
         await callback.answer(f"Channel {'enabled' if new_state else 'disabled'}.")
     channels = await repository.list_channels()
+    text = _render_channels_text(channels)
     kb = get_admin_channels_keyboard(channels)
     if callback.message:
-        await callback.message.edit_reply_markup(reply_markup=kb)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("adm_ch_del:"))
@@ -483,9 +623,10 @@ async def callback_adm_ch_del(callback: CallbackQuery, settings: Settings, repos
     )
     await callback.answer(f"Channel {channel_id} deleted.")
     channels = await repository.list_channels()
+    text = _render_channels_text(channels)
     kb = get_admin_channels_keyboard(channels)
     if callback.message:
-        await callback.message.edit_reply_markup(reply_markup=kb)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data == "adm_ch_add")
@@ -496,8 +637,9 @@ async def callback_adm_ch_add(callback: CallbackQuery, state: FSMContext, settin
     await state.set_state(AdminStates.waiting_for_channel_input)
     text = (
         "📢 <b>Add Required Channel</b>\n\n"
-        "Please send the channel's <code>@username</code> or numeric ID (e.g. <code>-1001234567890</code>).\n"
-        "Ensure the bot is added as an administrator to that channel."
+        "Send the channel's <b>@username</b> or numeric ID (e.g. <code>-1001234567890</code>):\n"
+        "<code>@MyMusicChannel</code>\n\n"
+        "💡 <i>Tip: Make sure the bot is already an Administrator in the channel. The bot will automatically fetch the channel's title and invite link!</i>"
     )
     if callback.message:
         await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(), parse_mode="HTML")
@@ -515,21 +657,41 @@ async def process_channel_input(
         await message.reply("Please provide a valid channel identifier.")
         return
 
-    username = channel_input.lstrip("@") if channel_input.startswith("@") else None
-    success = await repository.add_channel(channel_id=channel_input, username=username)
+    success, channel_id, username, title, invite_link, is_bot_admin = await _resolve_and_add_channel(
+        bot=message.bot, repository=repository, channel_input=channel_input
+    )
     await state.clear()
 
     if success:
         await repository.log_audit_action(
             admin_id=message.from_user.id,
             action="add_channel",
-            target=channel_input,
+            target=channel_id,
+            details=f"Title: {title}",
         )
         channels = await repository.list_channels()
         kb = get_admin_channels_keyboard(channels)
-        await message.answer(f"✅ Successfully added channel: <b>{channel_input}</b>", reply_markup=kb, parse_mode="HTML")
+        admin_warning = (
+            "\n🤖 <b>Bot Status:</b> 🟢 Administrator (Active & Ready)"
+            if is_bot_admin
+            else "\n🤖 <b>Bot Status:</b> ⚠️ <b>Not Admin yet</b>\n<i>Please promote the bot to Administrator so it can check memberships!</i>"
+        )
+        await message.answer(
+            f"✅ <b>Channel Added Successfully!</b>\n\n"
+            f"📢 <b>Title:</b> {title}\n"
+            f"🆔 <b>ID:</b> <code>{channel_id}</code>\n"
+            f"👤 <b>Username:</b> {f'@{username}' if username else '<i>(Private)</i>'}\n"
+            f"🔗 <b>Link:</b> {invite_link or '<i>(None)</i>'}"
+            f"{admin_warning}",
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
     else:
-        await message.answer(f"❌ Failed to add channel: <b>{channel_input}</b>", reply_markup=get_admin_back_keyboard(), parse_mode="HTML")
+        await message.answer(
+            f"❌ Failed to add channel: <b>{channel_input}</b>",
+            reply_markup=get_admin_back_keyboard(),
+            parse_mode="HTML",
+        )
 
 
 @router.message(Command("addchannel"))
@@ -541,15 +703,25 @@ async def cmd_add_channel(message: Message, settings: Settings, repository: Data
         await message.answer("Usage: <code>/addchannel @username</code> or <code>/addchannel -100123456789</code>", parse_mode="HTML")
         return
     channel_input = parts[1].strip()
-    username = channel_input.lstrip("@") if channel_input.startswith("@") else None
-    success = await repository.add_channel(channel_id=channel_input, username=username)
+    success, channel_id, username, title, invite_link, is_bot_admin = await _resolve_and_add_channel(
+        bot=message.bot, repository=repository, channel_input=channel_input
+    )
     if success:
         await repository.log_audit_action(
             admin_id=message.from_user.id,
             action="add_channel",
-            target=channel_input,
+            target=channel_id,
+            details=f"Title: {title}",
         )
-        await message.answer(f"✅ Added required channel: <b>{channel_input}</b>", parse_mode="HTML")
+        admin_warning = (
+            "\n🤖 <b>Bot Status:</b> 🟢 Administrator (Active)"
+            if is_bot_admin
+            else "\n🤖 <b>Bot Status:</b> ⚠️ <b>Not Admin yet</b> (Promote bot to admin in channel)"
+        )
+        await message.answer(
+            f"✅ Added channel: <b>{title}</b> (<code>{channel_id}</code>){admin_warning}",
+            parse_mode="HTML",
+        )
     else:
         await message.answer(f"❌ Failed to add channel: <b>{channel_input}</b>", parse_mode="HTML")
 
@@ -570,9 +742,19 @@ async def cmd_del_channel(message: Message, settings: Settings, repository: Data
             action="remove_channel",
             target=channel_input,
         )
-        await message.answer(f"✅ Removed required channel: <b>{channel_input}</b>", parse_mode="HTML")
+        await message.answer(f"✅ Removed channel: <b>{channel_input}</b>", parse_mode="HTML")
     else:
         await message.answer(f"❌ Channel not found: <b>{channel_input}</b>", parse_mode="HTML")
+
+
+@router.message(Command("channels"))
+async def cmd_channels(message: Message, settings: Settings, repository: DatabaseRepository) -> None:
+    if not is_admin_check(message, settings):
+        return
+    channels = await repository.list_channels()
+    text = _render_channels_text(channels)
+    kb = get_admin_channels_keyboard(channels)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 # --- Whitelist Management ---
@@ -687,6 +869,36 @@ async def callback_adm_wl_del(callback: CallbackQuery, settings: Settings, repos
     whitelist = await repository.list_whitelist()
     text = _render_whitelist_text(whitelist)
     kb = get_admin_whitelist_keyboard(whitelist)
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "adm_wl_sync")
+async def callback_adm_wl_sync(callback: CallbackQuery, settings: Settings, repository: DatabaseRepository) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+    whitelist = await repository.list_whitelist()
+    synced_count = 0
+    for w in whitelist:
+        try:
+            chat = await callback.bot.get_chat(w.user_id)
+            if chat:
+                username = chat.username or w.username
+                reason = w.reason or chat.full_name
+                await repository.add_to_whitelist(
+                    user_id=w.user_id,
+                    username=username,
+                    reason=reason,
+                )
+                synced_count += 1
+        except Exception:
+            pass
+
+    whitelist = await repository.list_whitelist()
+    text = _render_whitelist_text(whitelist)
+    kb = get_admin_whitelist_keyboard(whitelist)
+    await callback.answer(f"✅ Synced {synced_count}/{len(whitelist)} whitelisted users!", show_alert=True)
     if callback.message:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
@@ -872,6 +1084,35 @@ async def callback_adm_ban_del(callback: CallbackQuery, settings: Settings, repo
     banned = await repository.list_banned()
     text = _render_banlist_text(banned)
     kb = get_admin_banlist_keyboard(banned)
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "adm_ban_sync")
+async def callback_adm_ban_sync(callback: CallbackQuery, settings: Settings, repository: DatabaseRepository) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+    banned = await repository.list_banned()
+    synced_count = 0
+    for b in banned:
+        try:
+            chat = await callback.bot.get_chat(b.user_id)
+            if chat:
+                username = chat.username or b.username
+                await repository.ban_user(
+                    user_id=b.user_id,
+                    username=username,
+                    reason=b.reason,
+                )
+                synced_count += 1
+        except Exception:
+            pass
+
+    banned = await repository.list_banned()
+    text = _render_banlist_text(banned)
+    kb = get_admin_banlist_keyboard(banned)
+    await callback.answer(f"✅ Synced {synced_count}/{len(banned)} banned users!", show_alert=True)
     if callback.message:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 

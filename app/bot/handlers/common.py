@@ -57,18 +57,22 @@ async def cmd_cancel(message: Message, state: FSMContext, job_manager: JobManage
 async def callback_must_join_verify(
     callback: CallbackQuery,
     must_join_service: MustJoinService,
+    message_service: Optional[MessageService] = None,
 ) -> None:
     bot = callback.bot
-    user_id = callback.from_user.id
-    has_joined, missing = await must_join_service.check_user_membership(bot, user_id)
+    user = callback.from_user
+    has_joined, missing = await must_join_service.check_user_membership(bot, user.id)
 
     if has_joined:
         await callback.answer("✅ Thank you! Membership confirmed.", show_alert=True)
+        if message_service:
+            welcome_text = await message_service.get_welcome_message(user)
+        else:
+            from app.services.message_service import DEFAULT_WELCOME_MESSAGE, MessageService as MS
+            welcome_text = MS.render_template(DEFAULT_WELCOME_MESSAGE, user)
+        text = f"✅ <b>Membership Verified!</b>\n\n{welcome_text}"
         if callback.message:
-            await callback.message.edit_text(
-                "✅ <b>Membership Verified!</b>\n\nYou can now send your audio files.",
-                parse_mode="HTML",
-            )
+            await callback.message.edit_text(text, parse_mode="HTML")
     else:
         await callback.answer("⚠️ You have not joined all required channels yet.", show_alert=True)
         if callback.message:

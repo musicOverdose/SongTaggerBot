@@ -166,3 +166,68 @@ async def test_admin_whitelist_title_and_info_display(test_repo: DatabaseReposit
     assert "• <b>Alex VIP Producer</b> (@alex • <code>123</code>)" in text
     assert "• <code>789</code>" in text
 
+
+@pytest.mark.asyncio
+async def test_admin_channels_management_and_sync(test_repo: DatabaseRepository):
+    from app.database.models import RequiredChannel
+    from app.bot.keyboards.admin_menu import get_admin_channels_keyboard
+    from app.bot.handlers.admin_handlers import (
+        callback_adm_ch_info,
+        callback_adm_ch_sync,
+        callback_adm_wl_sync,
+        callback_adm_ban_sync,
+        _render_channels_text,
+    )
+
+    settings = Settings(bot_token="test", admin_ids=[1001])
+
+    # 1. Channels keyboard formatting
+    ch1 = RequiredChannel(channel_id="-100123456789", title="Music Channel", username="music_chan", is_enabled=True)
+    ch2 = RequiredChannel(channel_id="-100987654321", title=None, username=None, is_enabled=False)
+    kb = get_admin_channels_keyboard([ch1, ch2])
+
+    # Row 1: [📢 Music Channel], [🟢 On], [🗑]
+    assert kb.inline_keyboard[0][0].text == "📢 Music Channel"
+    assert kb.inline_keyboard[0][1].text == "🟢 On"
+    assert kb.inline_keyboard[0][2].text == "🗑"
+
+    # Row 2: [📢 -100987654321], [🔴 Off], [🗑]
+    assert kb.inline_keyboard[1][0].text == "📢 -100987654321"
+    assert kb.inline_keyboard[1][1].text == "🔴 Off"
+
+    # Action buttons: Add Channel and Sync Info
+    assert kb.inline_keyboard[2][0].text == "➕ Add Channel"
+    assert kb.inline_keyboard[2][1].text == "🔄 Sync Info"
+
+    # 2. Add channel to repo and test info popup
+    await test_repo.add_channel(channel_id="-100123456789", title="Music Channel", username="music_chan")
+    cb = MagicMock()
+    cb.from_user.id = 1001
+    cb.data = "adm_ch_info:-100123456789"
+    cb.bot.get_chat_member = AsyncMock(return_value=MagicMock(status="administrator"))
+    cb.answer = AsyncMock()
+
+    await callback_adm_ch_info(cb, settings, test_repo)
+    cb.answer.assert_called_once()
+    alert_text = cb.answer.call_args[0][0]
+    assert "Music Channel" in alert_text
+    assert "-100123456789" in alert_text
+    assert "@music_chan" in alert_text
+
+    # 3. Test _render_channels_text
+    summary = _render_channels_text([ch1, ch2])
+    assert "Music Channel" in summary
+    assert "Active" in summary
+    assert "Disabled" in summary
+
+    # 4. Test callback_adm_ch_sync
+    mock_chat = MagicMock(id=-100123456789, title="Updated Title", username="music_chan", invite_link="https://t.me/music_chan")
+    cb.bot.get_chat = AsyncMock(return_value=mock_chat)
+    cb.message = MagicMock()
+    cb.message.edit_text = AsyncMock()
+    await callback_adm_ch_sync(cb, settings, test_repo)
+    cb.answer.assert_called()
+    channels = await test_repo.list_channels()
+    assert channels[0].title == "Updated Title"
+
+

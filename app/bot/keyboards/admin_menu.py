@@ -46,20 +46,27 @@ def get_admin_channels_keyboard(channels: List[RequiredChannel]) -> InlineKeyboa
     """Manage required broadcast channels."""
     buttons = []
     for c in channels:
-        status_icon = "🟢" if c.is_enabled else "🔴"
-        display = c.username or c.channel_id
+        display = c.title or (f"@{c.username}" if c.username else c.channel_id)
+        if len(display) > 22:
+            display = display[:20] + "..."
+        status_label = "🟢 On" if c.is_enabled else "🔴 Off"
         buttons.append([
             InlineKeyboardButton(
-                text=f"{status_icon} {display}",
+                text=f"📢 {display}",
+                callback_data=f"adm_ch_info:{c.channel_id}",
+            ),
+            InlineKeyboardButton(
+                text=status_label,
                 callback_data=f"adm_ch_toggle:{c.channel_id}",
             ),
             InlineKeyboardButton(
-                text="🗑 Delete",
+                text="🗑",
                 callback_data=f"adm_ch_del:{c.channel_id}",
             ),
         ])
     buttons.append([
         InlineKeyboardButton(text="➕ Add Channel", callback_data="adm_ch_add"),
+        InlineKeyboardButton(text="🔄 Sync Info", callback_data="adm_ch_sync"),
     ])
     buttons.append([
         InlineKeyboardButton(text="↩ Back to Admin", callback_data="adm_home"),
@@ -87,6 +94,7 @@ def get_admin_whitelist_keyboard(whitelist: List[WhitelistedUser]) -> InlineKeyb
         ])
     buttons.append([
         InlineKeyboardButton(text="➕ Add to Whitelist", callback_data="adm_wl_add"),
+        InlineKeyboardButton(text="🔄 Sync Names", callback_data="adm_wl_sync"),
     ])
     buttons.append([
         InlineKeyboardButton(text="↩ Back to Admin", callback_data="adm_home"),
@@ -114,6 +122,7 @@ def get_admin_banlist_keyboard(banned: List[BannedUser]) -> InlineKeyboardMarkup
         ])
     buttons.append([
         InlineKeyboardButton(text="➕ Ban User", callback_data="adm_ban_add"),
+        InlineKeyboardButton(text="🔄 Sync Info", callback_data="adm_ban_sync"),
     ])
     buttons.append([
         InlineKeyboardButton(text="↩ Back to Admin", callback_data="adm_home"),
