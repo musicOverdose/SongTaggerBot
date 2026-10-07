@@ -27,7 +27,7 @@ async def callback_filename_menu(callback: CallbackQuery, state: FSMContext, job
 
     text = (
         f"📝 <b>Filename Options</b>\n\n"
-        f"Current filename:\n<code>{job.working_filename}</code>"
+        f"<b>Current filename:</b> <code>{job.working_filename}</code>"
     )
     kb = get_filename_menu_keyboard(job.uuid)
     if callback.message:

@@ -89,7 +89,7 @@ async def callback_file_info(callback: CallbackQuery, job_manager: JobManager) -
     )
     back_kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="↩ Back", callback_data=f"preview:{job.uuid}")]
+            [InlineKeyboardButton(text="↩ Back to Main", callback_data=f"preview:{job.uuid}")]
         ]
     )
     if callback.message:
@@ -99,7 +99,12 @@ async def callback_file_info(callback: CallbackQuery, job_manager: JobManager) -
 
 @router.callback_query(F.data.startswith("undo:"))
 async def callback_undo(callback: CallbackQuery, job_manager: JobManager) -> None:
-    job_uuid = callback.data.split(":", 1)[1]
+    parts = callback.data.split(":")
+    if len(parts) == 3:
+        screen_type, job_uuid = parts[1], parts[2]
+    else:
+        screen_type, job_uuid = "preview", parts[1]
+
     job = job_manager.get_job(job_uuid)
     if not job:
         await callback.answer("⚠️ Session expired or invalid.", show_alert=True)
@@ -112,13 +117,19 @@ async def callback_undo(callback: CallbackQuery, job_manager: JobManager) -> Non
 
     await callback.answer(f"↩ Reverted {change.field_name}", show_alert=False)
 
-    # Redraw current preview
+    # Redraw current screen
     text = format_metadata_preview(
         filename=job.working_filename,
         metadata=job.working_metadata,
         tech_info=job.technical_info,
     )
-    kb = get_editor_keyboard(job.uuid)
+    if screen_type == "editor":
+        kb = get_editor_keyboard(job.uuid)
+    elif screen_type == "adv":
+        kb = get_advanced_editor_keyboard(job.uuid)
+    else:
+        kb = get_preview_keyboard(job.uuid)
+
     if callback.message:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 

@@ -64,13 +64,12 @@ async def callback_edit_field(
 
     cancel_kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="↩ Cancel edit", callback_data=f"edit_menu:{job.uuid}")]
+            [InlineKeyboardButton(text="↩ Cancel", callback_data=f"edit_menu:{job.uuid}")]
         ]
     )
 
     prompt = (
-        f"Current <b>{display_name}</b>:\n\n"
-        f"<code>{val_or_dash(str(current_val) if current_val is not None else None)}</code>\n\n"
+        f"<b>Current {display_name}:</b> <code>{val_or_dash(str(current_val) if current_val is not None else None)}</code>\n\n"
         f"Send the new {display_name}."
     )
     if callback.message:

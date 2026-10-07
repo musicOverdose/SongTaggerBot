@@ -45,7 +45,7 @@ async def callback_cover_menu(callback: CallbackQuery, state: FSMContext, job_ma
 
     text = (
         f"🖼 <b>Cover Art</b>\n\n"
-        f"Current:\n{current_status}"
+        f"<b>Status:</b> {current_status}"
     )
     kb = get_cover_menu_keyboard(job.uuid)
     if callback.message:
@@ -115,12 +115,17 @@ async def callback_cover_upload_prompt(
     await state.set_state(EditorStates.waiting_for_cover)
     await state.update_data(job_uuid=job_uuid)
 
+    cancel_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="↩ Cancel", callback_data=f"cover_menu:{job.uuid}")]
+        ]
+    )
     text = (
         "📤 <b>Upload New Cover</b>\n\n"
         "Send an image file (JPG, PNG, or WebP) as a photo or uncompressed document."
     )
     if callback.message:
-        await callback.message.edit_text(text, parse_mode="HTML")
+        await callback.message.edit_text(text, reply_markup=cancel_kb, parse_mode="HTML")
     await callback.answer()
 
 

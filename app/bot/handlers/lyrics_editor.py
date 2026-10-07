@@ -27,7 +27,7 @@ async def callback_lyrics_menu(callback: CallbackQuery, state: FSMContext, job_m
     status_str = "✅ Embedded" if (job.working_metadata.lyrics and job.working_metadata.lyrics.strip()) else "— Not set"
     text = (
         f"🎤 <b>Lyrics</b>\n\n"
-        f"Status:\n{status_str}"
+        f"<b>Status:</b> {status_str}"
     )
     kb = get_lyrics_menu_keyboard(job.uuid)
     if callback.message:
@@ -80,7 +80,7 @@ async def callback_lyrics_remove(
     await repository.increment_stat("lyrics_updated")
     await callback.answer("🗑 Lyrics removed from working file.", show_alert=True)
 
-    text = "🎤 <b>Lyrics</b>\n\nStatus:\n— Not set"
+    text = "🎤 <b>Lyrics</b>\n\n<b>Status:</b> — Not set"
     kb = get_lyrics_menu_keyboard(job.uuid)
     if callback.message:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
