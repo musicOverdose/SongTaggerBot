@@ -107,20 +107,30 @@ class FileAcquisitionService:
             )
 
         # Verify file existence and readability
-        if not target_path.exists() or not target_path.is_file():
-            # Diagnostic information for administrator
-            root_exists = self.allowed_root.exists()
-            root_is_dir = self.allowed_root.is_dir() if root_exists else False
+        try:
+            if not target_path.exists() or not target_path.is_file():
+                # Diagnostic information for administrator
+                root_exists = self.allowed_root.exists()
+                root_is_dir = self.allowed_root.is_dir() if root_exists else False
+                logger.error(
+                    f"Local Bot API file not found on disk: '{target_path}'. "
+                    f"Allowed root: '{self.allowed_root}' (exists={root_exists}, is_dir={root_is_dir}). "
+                    f"Ensure the shared Docker volume 'telegram-bot-api-data' is mounted at "
+                    f"'{self.allowed_root}:ro'."
+                )
+                raise LocalFileAccessError(
+                    f"Local Bot API storage file is missing or inaccessible: '{target_path}'. "
+                    f"Please verify that the volume 'telegram-bot-api-data' is mounted to '{self.allowed_root}:ro'."
+                )
+        except PermissionError as e:
             logger.error(
-                f"Local Bot API file not found on disk: '{target_path}'. "
-                f"Allowed root: '{self.allowed_root}' (exists={root_exists}, is_dir={root_is_dir}). "
-                f"Ensure the shared Docker volume 'telegram-bot-api-data' is mounted at "
-                f"'{self.allowed_root}:ro'."
+                f"Permission denied accessing Local Bot API file '{target_path}': {e}. "
+                f"Ensure the bot process has read permissions for mounted volume '{self.allowed_root}'."
             )
             raise LocalFileAccessError(
-                f"Local Bot API storage file is missing or inaccessible: '{target_path}'. "
-                f"Please verify that the volume 'telegram-bot-api-data' is mounted to '{self.allowed_root}:ro'."
-            )
+                f"Permission denied accessing Local Bot API file: '{target_path}'. "
+                f"Check user/group permissions for volume mount '{self.allowed_root}:ro'."
+            ) from e
 
         # Copy directly via local filesystem (fast, zero network overhead)
         try:

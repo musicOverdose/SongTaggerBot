@@ -174,3 +174,26 @@ async def test_cover_image_acquisition_uses_same_service(local_settings: Setting
     assert result == dest
     assert dest.exists()
     assert dest.read_bytes() == b"\xFF\xD8\xFF\xE0_FAKE_JPEG"
+
+
+@pytest.mark.asyncio
+async def test_permission_denied_raises_local_file_access_error(local_settings: Settings, temp_tg_volume: Path, tmp_path: Path, monkeypatch):
+    """PermissionError on stat/exists is caught and converted to LocalFileAccessError."""
+    source_file = temp_tg_volume / "file_perm.mp3"
+    source_file.write_bytes(b"DATA")
+
+    def mock_exists_raise(self):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "exists", mock_exists_raise)
+
+    service = FileAcquisitionService(local_settings)
+    mock_bot = MagicMock(spec=Bot)
+    mock_file = File(file_id="tg_perm", file_unique_id="u_perm", file_path=str(source_file))
+    mock_bot.get_file = AsyncMock(return_value=mock_file)
+
+    dest = tmp_path / "dest.mp3"
+    with pytest.raises(LocalFileAccessError) as exc_info:
+        await service.acquire_file(mock_bot, "tg_perm", destination=dest)
+
+    assert "permission denied" in str(exc_info.value).lower()

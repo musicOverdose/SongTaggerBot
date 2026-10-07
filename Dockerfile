@@ -14,9 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
-# Create dedicated non-root user and group
+# Create dedicated non-root user and group, plus group 101 for telegram-bot-api volume compatibility
 RUN groupadd -g 10001 botgroup && \
-    useradd -u 10001 -g botgroup -s /bin/bash -m botuser
+    groupadd -g 101 tgapi && \
+    useradd -u 10001 -g botgroup -G tgapi -s /bin/bash -m botuser
 
 # Set working directory
 WORKDIR /app
@@ -41,7 +42,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /data /tmp/audio-bot && \
     chown -R botuser:botgroup /data /tmp/audio-bot /app
 
-# Entrypoint automatically ensures mounted volume permissions and drops to botuser
+# Entrypoint initializes directories and runs the application
 ENTRYPOINT ["docker-entrypoint.sh"]
 
 # Default command starts the bot in long polling mode
