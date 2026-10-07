@@ -13,7 +13,7 @@ def get_lyrics_menu_keyboard(job_uuid: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🗑 Remove Lyrics", callback_data=f"lyrics_remove:{job_uuid}"),
         ],
         [
-            InlineKeyboardButton(text="↩ Back to Main", callback_data=f"preview:{job_uuid}"),
+            InlineKeyboardButton(text="🏠 Back to Main", callback_data=f"preview:{job_uuid}"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

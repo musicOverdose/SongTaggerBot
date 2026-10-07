@@ -13,7 +13,7 @@ def get_cover_menu_keyboard(job_uuid: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🗑 Remove Cover", callback_data=f"cover_remove:{job_uuid}"),
         ],
         [
-            InlineKeyboardButton(text="↩ Back to Main", callback_data=f"preview:{job_uuid}"),
+            InlineKeyboardButton(text="🏠 Back to Main", callback_data=f"preview:{job_uuid}"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

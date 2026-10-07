@@ -89,7 +89,7 @@ async def callback_file_info(callback: CallbackQuery, job_manager: JobManager) -
     )
     back_kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="↩ Back to Main", callback_data=f"preview:{job.uuid}")]
+            [InlineKeyboardButton(text="🏠 Back to Main", callback_data=f"preview:{job.uuid}")]
         ]
     )
     if callback.message:

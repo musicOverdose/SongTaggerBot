@@ -13,7 +13,7 @@ def get_filename_menu_keyboard(job_uuid: str) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="↩ Back to Tags", callback_data=f"edit_menu:{job_uuid}"),
-            InlineKeyboardButton(text="🏠 Main Menu", callback_data=f"preview:{job_uuid}"),
+            InlineKeyboardButton(text="🏠 Back to Main", callback_data=f"preview:{job_uuid}"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

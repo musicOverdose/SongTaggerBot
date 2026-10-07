@@ -173,40 +173,143 @@ def test_navigation_keyboards_return_to_main_preview():
     # Main menu
     main_kb = get_preview_keyboard(uuid)
     main_callbacks = [btn.callback_data for row in main_kb.inline_keyboard for btn in row]
+    main_texts = [btn.text for row in main_kb.inline_keyboard for btn in row]
     assert f"edit_menu:{uuid}" in main_callbacks
     assert f"cover_menu:{uuid}" in main_callbacks
     assert f"lyrics_menu:{uuid}" in main_callbacks
     assert f"cut_menu:{uuid}" in main_callbacks
     assert f"undo:preview:{uuid}" in main_callbacks
+    assert "🔄 Undo Changes" in main_texts
 
-    # Editor keyboard has back to main
+    # Editor keyboard has simplified tags and swapped Undo / Back to Main buttons
     editor_kb = get_editor_keyboard(uuid)
     editor_callbacks = [btn.callback_data for row in editor_kb.inline_keyboard for btn in row]
-    assert f"preview:{uuid}" in editor_callbacks
+    editor_texts = [btn.text for row in editor_kb.inline_keyboard for btn in row]
 
-    # Cover menu has back to main
+    # Verify essential tags are present
+    assert f"field:title:{uuid}" in editor_callbacks
+    assert f"field:artist:{uuid}" in editor_callbacks
+    assert f"field:album:{uuid}" in editor_callbacks
+    assert f"field:date:{uuid}" in editor_callbacks
+    assert f"field:genre:{uuid}" in editor_callbacks
+    assert f"field:track_number:{uuid}" in editor_callbacks
+    assert f"field:albumartist:{uuid}" in editor_callbacks
+    assert f"fn_menu:{uuid}" in editor_callbacks
+
+    # Verify extra clutter tags are NOT in the simplified primary editor
+    assert f"field:disc_number:{uuid}" not in editor_callbacks
+    assert f"field:composer:{uuid}" not in editor_callbacks
+    assert f"field:comment:{uuid}" not in editor_callbacks
+    assert f"field:copyright:{uuid}" not in editor_callbacks
+
+    # Verify button positions: Undo Changes is above Back to Main + Finish
+    undo_row = editor_kb.inline_keyboard[4]
+    nav_row = editor_kb.inline_keyboard[5]
+    assert len(undo_row) == 1
+    assert undo_row[0].text == "🔄 Undo Changes"
+    assert undo_row[0].callback_data == f"undo:editor:{uuid}"
+    assert len(nav_row) == 2
+    assert nav_row[0].text == "🏠 Back to Main"
+    assert nav_row[0].callback_data == f"preview:{uuid}"
+    assert nav_row[1].text == "✅ Finish"
+
+    # Cover menu has 🏠 Back to Main
     cover_kb = get_cover_menu_keyboard(uuid)
     cover_callbacks = [btn.callback_data for row in cover_kb.inline_keyboard for btn in row]
+    cover_texts = [btn.text for row in cover_kb.inline_keyboard for btn in row]
     assert f"preview:{uuid}" in cover_callbacks
+    assert "🏠 Back to Main" in cover_texts
 
-    # Lyrics menu has back to main
+    # Lyrics menu has 🏠 Back to Main
     lyrics_kb = get_lyrics_menu_keyboard(uuid)
     lyrics_callbacks = [btn.callback_data for row in lyrics_kb.inline_keyboard for btn in row]
+    lyrics_texts = [btn.text for row in lyrics_kb.inline_keyboard for btn in row]
     assert f"preview:{uuid}" in lyrics_callbacks
+    assert "🏠 Back to Main" in lyrics_texts
 
-    # Cut menu has back to main
+    # Cut menu has 🏠 Back to Main
     cut_kb = get_cut_menu_keyboard(uuid)
     cut_callbacks = [btn.callback_data for row in cut_kb.inline_keyboard for btn in row]
+    cut_texts = [btn.text for row in cut_kb.inline_keyboard for btn in row]
     assert f"preview:{uuid}" in cut_callbacks
+    assert "🏠 Back to Main" in cut_texts
 
-    # Advanced editor has back to main
+    # Advanced editor has 🏠 Back to Main and 🔄 Undo Changes
     adv_kb = get_advanced_editor_keyboard(uuid)
     adv_callbacks = [btn.callback_data for row in adv_kb.inline_keyboard for btn in row]
+    adv_texts = [btn.text for row in adv_kb.inline_keyboard for btn in row]
     assert f"preview:{uuid}" in adv_callbacks
     assert f"edit_menu:{uuid}" in adv_callbacks
+    assert "🏠 Back to Main" in adv_texts
+    assert "🔄 Undo Changes" in adv_texts
 
-    # Filename menu has back to main and back to tags
+    # Filename menu has 🏠 Back to Main and back to tags
     fn_kb = get_filename_menu_keyboard(uuid)
     fn_callbacks = [btn.callback_data for row in fn_kb.inline_keyboard for btn in row]
+    fn_texts = [btn.text for row in fn_kb.inline_keyboard for btn in row]
     assert f"preview:{uuid}" in fn_callbacks
     assert f"edit_menu:{uuid}" in fn_callbacks
+    assert "🏠 Back to Main" in fn_texts
+
+
+@pytest.mark.asyncio
+async def test_finish_sends_file_without_caption_or_extra_attachments(sample_mp3: Path, tmp_path: Path):
+    from unittest.mock import AsyncMock, MagicMock
+    from app.audio.models import AudioFormat, AudioMetadata
+    from app.bot.handlers.finish_handler import callback_finish
+    import shutil
+
+    # Prepare job
+    test_file = tmp_path / "finish_test.mp3"
+    shutil.copy2(sample_mp3, test_file)
+
+    mgr = JobManager(base_jobs_dir=tmp_path / "jobs", ttl_minutes=30)
+    job = mgr.create_job(101, 101, "finish_test.mp3", ".mp3")
+    job.format = AudioFormat.MP3
+    shutil.copy2(test_file, job.working_path)
+    job.working_metadata = AudioMetadata(title="Test Song", artist="Test Artist")
+
+    callback = MagicMock()
+    callback.data = f"finish:{job.uuid}"
+    callback.from_user.id = 101
+    callback.message = MagicMock()
+    status_msg = AsyncMock()
+    callback.message.reply = AsyncMock(return_value=status_msg)
+    callback.answer = AsyncMock()
+
+    state = AsyncMock()
+    bot = AsyncMock()
+    callback.bot = bot
+
+    queue_mgr = MagicMock()
+    async def mock_enqueue(job_id, user_id, task_func):
+        await task_func()
+    queue_mgr.enqueue = mock_enqueue
+
+    metadata_mgr = MagicMock()
+    metadata_mgr.write_metadata = AsyncMock(return_value=True)
+    metadata_mgr.extract_cover = AsyncMock(return_value=False)
+
+    settings = Settings(bot_token="test:token", send_cover_separately=False)
+    repo = MagicMock()
+    repo.increment_stat = AsyncMock()
+    repo.update_job_status = AsyncMock()
+
+    await callback_finish(
+        callback=callback,
+        state=state,
+        job_manager=mgr,
+        queue_manager=queue_mgr,
+        metadata_manager=metadata_mgr,
+        settings=settings,
+        repository=repo,
+    )
+
+    # Verify send_audio was called with NO caption and NO parse_mode
+    bot.send_audio.assert_called_once()
+    call_kwargs = bot.send_audio.call_args.kwargs
+    assert "caption" not in call_kwargs or call_kwargs.get("caption") is None
+    assert "parse_mode" not in call_kwargs
+
+    # Verify send_photo was NOT called
+    bot.send_photo.assert_not_called()

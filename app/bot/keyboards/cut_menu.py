@@ -9,7 +9,7 @@ def get_cut_menu_keyboard(job_uuid: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✂️ Enter Cut Range", callback_data=f"cut_enter:{job_uuid}"),
         ],
         [
-            InlineKeyboardButton(text="↩ Back to Main", callback_data=f"preview:{job_uuid}"),
+            InlineKeyboardButton(text="🏠 Back to Main", callback_data=f"preview:{job_uuid}"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

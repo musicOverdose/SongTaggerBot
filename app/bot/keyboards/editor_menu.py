@@ -4,7 +4,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 def get_editor_keyboard(job_uuid: str) -> InlineKeyboardMarkup:
-    """Core metadata editor keyboard."""
+    """Core metadata editor keyboard with simplified, essential tags."""
     buttons = [
         [
             InlineKeyboardButton(text="🏷 Title", callback_data=f"field:title:{job_uuid}"),
@@ -20,22 +20,13 @@ def get_editor_keyboard(job_uuid: str) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="👥 Album Artist", callback_data=f"field:albumartist:{job_uuid}"),
-            InlineKeyboardButton(text="💽 Disc", callback_data=f"field:disc_number:{job_uuid}"),
-        ],
-        [
             InlineKeyboardButton(text="📝 Filename", callback_data=f"fn_menu:{job_uuid}"),
-            InlineKeyboardButton(text="🎼 Composer", callback_data=f"field:composer:{job_uuid}"),
         ],
         [
-            InlineKeyboardButton(text="💬 Comment", callback_data=f"field:comment:{job_uuid}"),
-            InlineKeyboardButton(text="© Copyright", callback_data=f"field:copyright:{job_uuid}"),
+            InlineKeyboardButton(text="🔄 Undo Changes", callback_data=f"undo:editor:{job_uuid}"),
         ],
         [
-            InlineKeyboardButton(text="⚙️ More Tags", callback_data=f"adv_menu:{job_uuid}"),
-            InlineKeyboardButton(text="↩ Back to Main", callback_data=f"preview:{job_uuid}"),
-        ],
-        [
-            InlineKeyboardButton(text="↩ Undo", callback_data=f"undo:editor:{job_uuid}"),
+            InlineKeyboardButton(text="🏠 Back to Main", callback_data=f"preview:{job_uuid}"),
             InlineKeyboardButton(text="✅ Finish", callback_data=f"finish:{job_uuid}"),
         ],
         [
@@ -48,6 +39,14 @@ def get_editor_keyboard(job_uuid: str) -> InlineKeyboardMarkup:
 def get_advanced_editor_keyboard(job_uuid: str) -> InlineKeyboardMarkup:
     """Advanced metadata fields editor keyboard."""
     buttons = [
+        [
+            InlineKeyboardButton(text="💽 Disc", callback_data=f"field:disc_number:{job_uuid}"),
+            InlineKeyboardButton(text="🎼 Composer", callback_data=f"field:composer:{job_uuid}"),
+        ],
+        [
+            InlineKeyboardButton(text="💬 Comment", callback_data=f"field:comment:{job_uuid}"),
+            InlineKeyboardButton(text="© Copyright", callback_data=f"field:copyright:{job_uuid}"),
+        ],
         [
             InlineKeyboardButton(text="📁 Grouping", callback_data=f"field:grouping:{job_uuid}"),
             InlineKeyboardButton(text="⏱ BPM", callback_data=f"field:bpm:{job_uuid}"),
@@ -70,10 +69,10 @@ def get_advanced_editor_keyboard(job_uuid: str) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="↩ Back to Tags", callback_data=f"edit_menu:{job_uuid}"),
-            InlineKeyboardButton(text="🏠 Main Menu", callback_data=f"preview:{job_uuid}"),
+            InlineKeyboardButton(text="🔄 Undo Changes", callback_data=f"undo:adv:{job_uuid}"),
         ],
         [
-            InlineKeyboardButton(text="↩ Undo", callback_data=f"undo:adv:{job_uuid}"),
+            InlineKeyboardButton(text="🏠 Back to Main", callback_data=f"preview:{job_uuid}"),
             InlineKeyboardButton(text="✅ Finish", callback_data=f"finish:{job_uuid}"),
         ],
         [

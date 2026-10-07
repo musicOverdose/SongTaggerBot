@@ -10,7 +10,6 @@ from app.audio.cover_manager import CoverManager
 from app.audio.metadata_manager import MetadataManager
 from app.audio.models import AudioFormat
 from app.audio.probe import AudioProber
-from app.bot.formatting import format_metadata_preview
 from app.config import Settings
 from app.database.repository import DatabaseRepository
 from app.services.job_manager import JobManager
@@ -109,18 +108,7 @@ async def callback_finish(
 
             thumb_file = FSInputFile(str(job.thumbnail_path)) if has_thumb and job.thumbnail_path.exists() else None
 
-            # 5. Format final caption preview
-            caption_text = format_metadata_preview(
-                filename=job.working_filename,
-                metadata=job.working_metadata,
-                tech_info=final_tech,
-            )
-
-            # Cap caption length to 1024 chars if necessary for Telegram caption limits
-            if len(caption_text) > 1024:
-                caption_text = caption_text[:1000] + "..."
-
-            # 6. Send file using appropriate method
+            # 5. Send file directly without caption or extra attachments
             audio_file = FSInputFile(str(job.working_path), filename=job.working_filename)
 
             if job.format in (AudioFormat.MP3, AudioFormat.M4A):
@@ -132,8 +120,6 @@ async def callback_finish(
                 await bot.send_audio(
                     chat_id=job.chat_id,
                     audio=audio_file,
-                    caption=caption_text,
-                    parse_mode="HTML",
                     duration=duration,
                     performer=performer,
                     title=title,
@@ -144,18 +130,7 @@ async def callback_finish(
                 await bot.send_document(
                     chat_id=job.chat_id,
                     document=audio_file,
-                    caption=caption_text,
-                    parse_mode="HTML",
                     thumbnail=thumb_file,
-                )
-
-            # 7. Optionally send cover as separate photo
-            if settings.send_cover_separately and thumb_input_path and thumb_input_path.exists():
-                cover_photo = FSInputFile(str(thumb_input_path))
-                await bot.send_photo(
-                    chat_id=job.chat_id,
-                    photo=cover_photo,
-                    caption="🖼 Album Artwork",
                 )
 
             # 8. Update stats & database

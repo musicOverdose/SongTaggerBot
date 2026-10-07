@@ -18,7 +18,7 @@ def get_preview_keyboard(job_uuid: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📄 File Info", callback_data=f"file_info:{job_uuid}"),
         ],
         [
-            InlineKeyboardButton(text="↩ Undo", callback_data=f"undo:preview:{job_uuid}"),
+            InlineKeyboardButton(text="🔄 Undo Changes", callback_data=f"undo:preview:{job_uuid}"),
             InlineKeyboardButton(text="✅ Finish", callback_data=f"finish:{job_uuid}"),
         ],
         [
