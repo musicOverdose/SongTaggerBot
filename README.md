@@ -249,7 +249,7 @@ Administrators (whose user IDs are listed in `ADMIN_IDS`) have access to a full 
 
 - `/admin` &mdash; **Interactive Operational Dashboard**: Displays real-time operational metrics including **system uptime**, **API Mode** (Cloud vs Local server), **active jobs**, **temporary scratchpad disk usage**, **whitelist & ban counts**, **channel status**, and **maintenance mode**. Offers quick-action inline buttons to:
   - ⚙️ **Bot Settings Panel**: Real-time configuration panel allowing admins to:
-    - Switch between **Cloud Mode** and **Local Server Mode** on the fly with safe transition and `getMe` connectivity verification.
+    - Configure **Cloud Mode** or **Local Server Mode** with restart vs. Telegram migration requirement tracking and manual `logOut` guidance.
     - Update the centralized **Local Bot API endpoint URL**.
     - Configure max input/output file sizes with quick presets or custom sizes.
     - Toggle **Technical Specs in preview** and **Send Cover Separately**.
@@ -346,7 +346,7 @@ docker compose up -d
 
 ### 3. File rejected as oversized
 - Default Telegram Bot API download limit is 20 MB.
-- If using Local Bot API Server, verify `TELEGRAM_API_BASE` and `MAX_INPUT_MB` are configured.
+- If using Local Bot API Server, verify `TELEGRAM_API_MODE=local`, `TELEGRAM_API_BASE_URL`, and `MAX_INPUT_MB` are configured.
 
 ### 4. Permission Denied on `/data`
 - The container runs as non-root user `botuser` (UID 10001).
