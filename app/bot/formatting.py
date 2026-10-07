@@ -40,6 +40,10 @@ def format_metadata_preview(
     if metadata.albumartist:
         album_artist_line = f"<b>Album Artist:</b> {metadata.albumartist}\n"
 
+    comment_line = ""
+    if metadata.comment and str(metadata.comment).strip():
+        comment_line = f"<b>Comment:</b> {str(metadata.comment).strip()}\n"
+
     audio_line = ""
     if tech_info:
         parts = [tech_info.format_name]
@@ -64,6 +68,7 @@ def format_metadata_preview(
         f"<b>Year:</b> {val_or_dash(metadata.date)}\n"
         f"<b>Genre:</b> {val_or_dash(metadata.genre)}\n"
         f"<b>Track:</b> {track_str}\n"
+        f"{comment_line}"
         f"<b>Cover:</b> {cover_str}\n"
         f"<b>Lyrics:</b> {lyrics_str}"
         f"{audio_line}"

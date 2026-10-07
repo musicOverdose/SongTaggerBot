@@ -4,7 +4,13 @@ import logging
 from pathlib import Path
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from app.audio.cover_manager import CoverManager
 from app.bot.keyboards.cover_menu import get_cover_confirm_keyboard, get_cover_menu_keyboard

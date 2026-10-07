@@ -9,7 +9,7 @@ def get_cover_menu_keyboard(job_uuid: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📤 Upload New Cover", callback_data=f"cover_upload:{job_uuid}"),
         ],
         [
-            InlineKeyboardButton(text="🔍 View Current Cover", callback_data=f"cover_view:{job_uuid}"),
+            InlineKeyboardButton(text="🔍 View Cover", callback_data=f"cover_view:{job_uuid}"),
             InlineKeyboardButton(text="🗑 Remove Cover", callback_data=f"cover_remove:{job_uuid}"),
         ],
         [

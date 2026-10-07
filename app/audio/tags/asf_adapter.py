@@ -127,6 +127,16 @@ class ASFAdapter(BaseTagAdapter):
         elif metadata.lyrics == "" and "WM/Lyrics" in audio:
             del audio["WM/Lyrics"]
 
+        if metadata.strip_extra:
+            allowed_asf = {
+                "Title", "Author", "WM/AlbumTitle", "WM/AlbumArtist",
+                "WM/Year", "WM/Genre", "WM/TrackNumber", "Description",
+                "WM/Lyrics", "WM/Picture",
+            }
+            for k in list(audio.keys()):
+                if k not in allowed_asf:
+                    del audio[k]
+
         audio.save()
 
     def extract_cover(self, file_path: Path, target_path: Path) -> Optional[Tuple[int, int]]:

@@ -97,6 +97,28 @@ async def callback_file_info(callback: CallbackQuery, job_manager: JobManager) -
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("strip_extra:"))
+async def callback_strip_extra(callback: CallbackQuery, state: FSMContext, job_manager: JobManager) -> None:
+    await state.clear()
+    job_uuid = callback.data.split(":", 1)[1]
+    job = job_manager.get_job(job_uuid)
+    if not job:
+        await callback.answer("⚠️ Session expired or invalid.", show_alert=True)
+        return
+
+    job.strip_extra_tags()
+    await callback.answer("🧹 Extra tags removed!", show_alert=False)
+
+    text = format_metadata_preview(
+        filename=job.working_filename,
+        metadata=job.working_metadata,
+        tech_info=job.technical_info,
+    )
+    kb = get_editor_keyboard(job.uuid)
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+
 @router.callback_query(F.data.startswith("undo:"))
 async def callback_undo(callback: CallbackQuery, job_manager: JobManager) -> None:
     parts = callback.data.split(":")
@@ -115,7 +137,10 @@ async def callback_undo(callback: CallbackQuery, job_manager: JobManager) -> Non
         await callback.answer("ℹ️ Nothing to undo.", show_alert=False)
         return
 
-    await callback.answer(f"↩ Reverted {change.field_name}", show_alert=False)
+    if change.field_name == "_extra_tags_snapshot":
+        await callback.answer("↩ Restored extra tags", show_alert=False)
+    else:
+        await callback.answer(f"↩ Reverted {change.field_name}", show_alert=False)
 
     # Redraw current screen
     text = format_metadata_preview(

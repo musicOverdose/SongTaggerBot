@@ -233,6 +233,16 @@ class VorbisAdapter(BaseTagAdapter):
             set_tag("LYRICS", None)
             set_tag("UNSYNCEDLYRICS", None)
 
+        if metadata.strip_extra:
+            allowed_vorbis = {
+                "TITLE", "ARTIST", "ALBUM", "ALBUMARTIST", "DATE", "GENRE",
+                "TRACKNUMBER", "TRACKTOTAL", "TOTALTRACKS", "COMMENT",
+                "DESCRIPTION", "LYRICS", "UNSYNCEDLYRICS", "METADATA_BLOCK_PICTURE",
+            }
+            for k in list(tags.keys()):
+                if k.upper() not in allowed_vorbis:
+                    del tags[k]
+
         audio.save()
 
     def extract_cover(self, file_path: Path, target_path: Path) -> Optional[Tuple[int, int]]:

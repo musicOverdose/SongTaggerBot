@@ -20,7 +20,13 @@ def get_editor_keyboard(job_uuid: str) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="👥 Album Artist", callback_data=f"field:albumartist:{job_uuid}"),
+            InlineKeyboardButton(text="💬 Comment", callback_data=f"field:comment:{job_uuid}"),
+        ],
+        [
             InlineKeyboardButton(text="📝 Filename", callback_data=f"fn_menu:{job_uuid}"),
+        ],
+        [
+            InlineKeyboardButton(text="🧹 Remove Extra Tags", callback_data=f"strip_extra:{job_uuid}"),
         ],
         [
             InlineKeyboardButton(text="🔄 Undo Changes", callback_data=f"undo:editor:{job_uuid}"),

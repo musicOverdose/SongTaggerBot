@@ -235,6 +235,13 @@ class ID3Adapter(BaseTagAdapter):
         elif metadata.lyrics == "":
             self.remove_lyrics(file_path)
 
+        # Strip extra tags outside primary edit list if requested
+        if metadata.strip_extra:
+            allowed_prefixes = ("TIT2", "TPE1", "TALB", "TPE2", "TDRC", "TYER", "TCON", "TRCK", "COMM", "USLT", "APIC")
+            for frame_id in list(tags.keys()):
+                if not any(frame_id.startswith(p) for p in allowed_prefixes):
+                    del tags[frame_id]
+
         tags.save(file_path, v2_version=4)
 
     def extract_cover(self, file_path: Path, target_path: Path) -> Optional[Tuple[int, int]]:

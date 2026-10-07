@@ -65,17 +65,34 @@ class Job:
             self.working_metadata.has_lyrics = bool(new_value and str(new_value).strip())
         self.touch()
 
+    def strip_extra_tags(self) -> None:
+        """Strip all extra tags outside core edit list and record snapshot for undo."""
+        old_snapshot = self.working_metadata.clone()
+        self.working_metadata.remove_extra_tags()
+        self.change_history.append(
+            MetadataChange(
+                field_name="_extra_tags_snapshot",
+                old_value=old_snapshot,
+                new_value=None,
+                timestamp=time.time(),
+            )
+        )
+        self.touch()
+
     def undo_last_change(self) -> Optional[MetadataChange]:
         """Revert the most recent metadata change."""
         if not self.change_history:
             return None
 
         last_change = self.change_history.pop()
-        setattr(self.working_metadata, last_change.field_name, last_change.old_value)
-        if last_change.field_name == "lyrics":
-            self.working_metadata.has_lyrics = bool(
-                last_change.old_value and str(last_change.old_value).strip()
-            )
+        if last_change.field_name == "_extra_tags_snapshot":
+            self.working_metadata = last_change.old_value
+        else:
+            setattr(self.working_metadata, last_change.field_name, last_change.old_value)
+            if last_change.field_name == "lyrics":
+                self.working_metadata.has_lyrics = bool(
+                    last_change.old_value and str(last_change.old_value).strip()
+                )
         self.touch()
         return last_change
 

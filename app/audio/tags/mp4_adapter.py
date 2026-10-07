@@ -166,6 +166,15 @@ class MP4Adapter(BaseTagAdapter):
             if "\xa9lyr" in tags:
                 del tags["\xa9lyr"]
 
+        if metadata.strip_extra:
+            allowed_mp4 = {
+                "\xa9nam", "\xa9ART", "\xa9alb", "aART", "\xa9day",
+                "\xa9gen", "trkn", "\xa9cmt", "\xa9lyr", "covr",
+            }
+            for k in list(tags.keys()):
+                if k not in allowed_mp4:
+                    del tags[k]
+
         audio.save()
 
     def extract_cover(self, file_path: Path, target_path: Path) -> Optional[Tuple[int, int]]:

@@ -77,6 +77,26 @@ class AudioMetadata:
 
     # Container-specific / unmapped tag frames to preserve on writes
     custom_tags: dict[str, Any] = field(default_factory=dict)
+    strip_extra: bool = False
+
+    def remove_extra_tags(self) -> None:
+        """Clear all metadata fields outside the primary edit list."""
+        self.strip_extra = True
+        self.composer = None
+        self.disc_number = None
+        self.disc_total = None
+        self.copyright = None
+        self.grouping = None
+        self.bpm = None
+        self.publisher = None
+        self.conductor = None
+        self.compilation = None
+        self.isrc = None
+        self.sort_title = None
+        self.sort_artist = None
+        self.sort_album = None
+        self.sort_album_artist = None
+        self.custom_tags.clear()
 
     def clone(self) -> "AudioMetadata":
         """Create a deep copy of this metadata object."""
@@ -111,6 +131,7 @@ class AudioMetadata:
             sort_album_artist=self.sort_album_artist,
             isrc=self.isrc,
             custom_tags=dict(self.custom_tags),
+            strip_extra=self.strip_extra,
         )
 
 

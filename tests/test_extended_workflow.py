@@ -186,7 +186,7 @@ def test_navigation_keyboards_return_to_main_preview():
     editor_callbacks = [btn.callback_data for row in editor_kb.inline_keyboard for btn in row]
     editor_texts = [btn.text for row in editor_kb.inline_keyboard for btn in row]
 
-    # Verify essential tags are present
+    # Verify essential tags are present (including comment and filename)
     assert f"field:title:{uuid}" in editor_callbacks
     assert f"field:artist:{uuid}" in editor_callbacks
     assert f"field:album:{uuid}" in editor_callbacks
@@ -194,17 +194,22 @@ def test_navigation_keyboards_return_to_main_preview():
     assert f"field:genre:{uuid}" in editor_callbacks
     assert f"field:track_number:{uuid}" in editor_callbacks
     assert f"field:albumartist:{uuid}" in editor_callbacks
+    assert f"field:comment:{uuid}" in editor_callbacks
     assert f"fn_menu:{uuid}" in editor_callbacks
+    assert f"strip_extra:{uuid}" in editor_callbacks
 
     # Verify extra clutter tags are NOT in the simplified primary editor
     assert f"field:disc_number:{uuid}" not in editor_callbacks
     assert f"field:composer:{uuid}" not in editor_callbacks
-    assert f"field:comment:{uuid}" not in editor_callbacks
     assert f"field:copyright:{uuid}" not in editor_callbacks
 
-    # Verify button positions: Undo Changes is above Back to Main + Finish
-    undo_row = editor_kb.inline_keyboard[4]
-    nav_row = editor_kb.inline_keyboard[5]
+    # Verify button positions: Strip Extra Tags, Undo Changes, Back to Main + Finish
+    strip_row = editor_kb.inline_keyboard[5]
+    undo_row = editor_kb.inline_keyboard[6]
+    nav_row = editor_kb.inline_keyboard[7]
+    assert len(strip_row) == 1
+    assert strip_row[0].text == "🧹 Remove Extra Tags"
+    assert strip_row[0].callback_data == f"strip_extra:{uuid}"
     assert len(undo_row) == 1
     assert undo_row[0].text == "🔄 Undo Changes"
     assert undo_row[0].callback_data == f"undo:editor:{uuid}"
@@ -213,12 +218,14 @@ def test_navigation_keyboards_return_to_main_preview():
     assert nav_row[0].callback_data == f"preview:{uuid}"
     assert nav_row[1].text == "✅ Finish"
 
-    # Cover menu has 🏠 Back to Main
+    # Cover menu has 🏠 Back to Main and 🔍 View Cover (compact for small screen)
     cover_kb = get_cover_menu_keyboard(uuid)
     cover_callbacks = [btn.callback_data for row in cover_kb.inline_keyboard for btn in row]
     cover_texts = [btn.text for row in cover_kb.inline_keyboard for btn in row]
     assert f"preview:{uuid}" in cover_callbacks
     assert "🏠 Back to Main" in cover_texts
+    assert "🔍 View Cover" in cover_texts
+    assert "🔍 View Current Cover" not in cover_texts
 
     # Lyrics menu has 🏠 Back to Main
     lyrics_kb = get_lyrics_menu_keyboard(uuid)
@@ -318,3 +325,100 @@ async def test_finish_sends_file_without_caption_or_extra_attachments(sample_mp3
     # Verify edit menu message and status message were removed
     callback.message.delete.assert_called_once()
     status_msg.delete.assert_called_once()
+
+
+def test_strip_extra_tags_lifecycle_and_undo(tmp_path: Path):
+    from app.audio.models import AudioMetadata
+    from app.services.job_manager import JobManager
+
+    mgr = JobManager(base_jobs_dir=tmp_path / "jobs", ttl_minutes=30)
+    job = mgr.create_job(101, 101, "track.mp3", ".mp3")
+    job.working_metadata = AudioMetadata(
+        title="Title",
+        artist="Artist",
+        composer="Unwanted Composer",
+        disc_number=2,
+        bpm=128,
+        publisher="Unwanted Label",
+        comment="Keep this comment",
+    )
+
+    # Strip extra tags
+    job.strip_extra_tags()
+
+    # Core tags and comment preserved
+    assert job.working_metadata.title == "Title"
+    assert job.working_metadata.artist == "Artist"
+    assert job.working_metadata.comment == "Keep this comment"
+    assert job.working_metadata.strip_extra is True
+
+    # Extra tags removed
+    assert job.working_metadata.composer is None
+    assert job.working_metadata.disc_number is None
+    assert job.working_metadata.bpm is None
+    assert job.working_metadata.publisher is None
+
+    # Undo restores extra tags snapshot
+    reverted = job.undo_last_change()
+    assert reverted.field_name == "_extra_tags_snapshot"
+    assert job.working_metadata.composer == "Unwanted Composer"
+    assert job.working_metadata.disc_number == 2
+    assert job.working_metadata.bpm == 128
+    assert job.working_metadata.publisher == "Unwanted Label"
+
+
+@pytest.mark.asyncio
+async def test_cover_upload_prompt_no_nameerror(tmp_path: Path):
+    from unittest.mock import AsyncMock, MagicMock
+    from app.bot.handlers.cover_editor import callback_cover_upload_prompt
+    from app.services.job_manager import JobManager
+
+    mgr = JobManager(base_jobs_dir=tmp_path / "jobs", ttl_minutes=30)
+    job = mgr.create_job(101, 101, "track.mp3", ".mp3")
+
+    callback = MagicMock()
+    callback.data = f"cover_upload:{job.uuid}"
+    callback.message = AsyncMock()
+    callback.answer = AsyncMock()
+    state = AsyncMock()
+
+    # Must execute without NameError
+    await callback_cover_upload_prompt(callback, state, mgr)
+    callback.message.edit_text.assert_called_once()
+    call_kwargs = callback.message.edit_text.call_args.kwargs
+    assert call_kwargs["reply_markup"] is not None
+
+
+@pytest.mark.asyncio
+async def test_metadata_write_strips_extra_id3_frames(sample_mp3: Path, tmp_path: Path):
+    import shutil
+    from mutagen.id3 import ID3, TCOM, TBPM
+    from app.audio.metadata_manager import MetadataManager
+    from app.audio.models import AudioFormat, AudioMetadata
+
+    test_file = tmp_path / "strip_test.mp3"
+    shutil.copy2(sample_mp3, test_file)
+
+    # Add extra frames to the test MP3
+    tags = ID3(test_file)
+    tags.add(TCOM(encoding=3, text="Extra Composer"))
+    tags.add(TBPM(encoding=3, text="130"))
+    tags.save()
+
+    meta_mgr = MetadataManager()
+    meta = AudioMetadata(
+        title="Clean Title",
+        artist="Clean Artist",
+        comment="Nice Track",
+    )
+    meta.remove_extra_tags()
+
+    assert meta.strip_extra is True
+    success = await meta_mgr.write_metadata(test_file, meta, AudioFormat.MP3)
+    assert success is True
+
+    # Read back and verify TCOM and TBPM are gone
+    verified_tags = ID3(test_file)
+    assert "TCOM" not in verified_tags
+    assert "TBPM" not in verified_tags
+    assert str(verified_tags.get("TIT2")) == "Clean Title"
