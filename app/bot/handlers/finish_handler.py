@@ -138,9 +138,18 @@ async def callback_finish(
             await repository.increment_stat("total_processed_bytes", output_size)
             await repository.update_job_status(job.uuid, "completed")
 
-            # 9. Cleanup temporary job directory
+            # 9. Cleanup temporary job directory and messages
             job_manager.cleanup_job(job.uuid)
-            await status_msg.delete()
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+
+            if callback.message:
+                try:
+                    await callback.message.delete()
+                except Exception:
+                    pass
 
         except Exception as e:
             logger.error(f"Error finalizing job {job.uuid}: {e}", exc_info=True)

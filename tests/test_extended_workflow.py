@@ -275,6 +275,7 @@ async def test_finish_sends_file_without_caption_or_extra_attachments(sample_mp3
     callback.message = MagicMock()
     status_msg = AsyncMock()
     callback.message.reply = AsyncMock(return_value=status_msg)
+    callback.message.delete = AsyncMock()
     callback.answer = AsyncMock()
 
     state = AsyncMock()
@@ -313,3 +314,7 @@ async def test_finish_sends_file_without_caption_or_extra_attachments(sample_mp3
 
     # Verify send_photo was NOT called
     bot.send_photo.assert_not_called()
+
+    # Verify edit menu message and status message were removed
+    callback.message.delete.assert_called_once()
+    status_msg.delete.assert_called_once()
