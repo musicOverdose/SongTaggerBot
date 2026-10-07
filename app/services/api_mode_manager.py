@@ -161,37 +161,50 @@ class ApiModeManager:
         Transactionally resets dynamic overrides back to .env values with verification and rollback.
 
         Steps:
-        1. Save previous API configuration.
-        2. Build candidate .env configuration.
-        3. Switch bot.session.api temporarily.
-        4. Verify connectivity using get_me().
-        5. If get_me() fails, restore previous API configuration without clearing DB overrides.
-        6. If get_me() succeeds, clear DB overrides, update in-memory settings, and log audit.
+        1. Acquire switch lock to avoid race conditions.
+        2. Save the current API server/session state.
+        3. Load the .env configuration into a candidate instance.
+        4. Build candidate API server.
+        5. Temporarily assign candidate to bot.session.api.
+        6. Verify connectivity using get_me() with 10s timeout.
+        7. If verification fails:
+           - restore previous bot.session.api
+           - do NOT clear any DB overrides
+           - do NOT change in-memory settings
+           - do NOT write an audit log
+           - return clear failure message
+        8. Only if verification succeeds:
+           - clear the database overrides
+           - update in-memory settings
+           - commit the successful reset
+           - write the audit log
+           - return success
         """
         async with self._switch_lock:
-            from app.config import reload_settings
-
+            # 2. Save current API server/session state
             prev_server = getattr(self.bot.session, "api", PRODUCTION)
             prev_mode = self.get_current_mode()
-            new_settings = reload_settings()
 
-            # Determine candidate API server
-            if new_settings.is_local_mode:
+            # 3. Load the .env configuration
+            candidate_settings = Settings()
+
+            # 4. Build candidate API server
+            if candidate_settings.is_local_mode:
                 target_server = TelegramAPIServer.from_base(
-                    new_settings.effective_api_base_url,
+                    candidate_settings.effective_api_base_url,
                     is_local=False,
                 )
             else:
                 target_server = PRODUCTION
 
-            # Switch temporarily
+            # 5. Temporarily assign candidate
             self.bot.session.api = target_server
 
-            # Verify connectivity
+            # 6. Verify connectivity via getMe
             try:
                 me = await asyncio.wait_for(self.bot.get_me(), timeout=10.0)
             except Exception as exc:
-                # Restore previous API configuration and retain existing DB overrides
+                # 7. Verification failed: restore previous bot.session.api, leave DB and memory untouched
                 self.bot.session.api = prev_server
                 logger.error(
                     f"Connection verification failed during reset to .env defaults: {exc}. "
@@ -199,7 +212,7 @@ class ApiModeManager:
                 )
                 return False, f"Connection verification failed during reset ({exc}). Previous configuration retained."
 
-            # Verification succeeded - clear DB overrides
+            # 8. Verification succeeded: clear database overrides
             for key in (
                 "telegram_api_mode",
                 "telegram_api_base_url",
@@ -211,18 +224,26 @@ class ApiModeManager:
                 await self.repository.set_system_setting(key, "")
 
             # Update in-memory settings
-            self.settings.telegram_api_mode = new_settings.telegram_api_mode
-            self.settings.telegram_api_base_url = new_settings.telegram_api_base_url
-            self.settings.max_input_mb = new_settings.max_input_mb
-            self.settings.max_output_mb = new_settings.max_output_mb
-            self.settings.show_technical_info = new_settings.show_technical_info
-            self.settings.send_cover_separately = new_settings.send_cover_separately
+            self.settings.telegram_api_mode = candidate_settings.telegram_api_mode
+            self.settings.telegram_api_base_url = candidate_settings.telegram_api_base_url
+            self.settings.max_input_mb = candidate_settings.max_input_mb
+            self.settings.max_output_mb = candidate_settings.max_output_mb
+            self.settings.show_technical_info = candidate_settings.show_technical_info
+            self.settings.send_cover_separately = candidate_settings.send_cover_separately
+
+            # Synchronize global settings singleton
+            try:
+                from app.config import reload_settings
+                reload_settings()
+            except Exception:
+                pass
 
             if admin_id:
                 await self.repository.log_audit_action(
                     admin_id=admin_id,
                     action="reset_settings",
-                    details=f"Reset settings to .env defaults ({new_settings.telegram_api_mode}). Verified as @{me.username}",
+                    details=f"Reset settings to .env defaults ({candidate_settings.telegram_api_mode}). Verified as @{me.username}",
                 )
 
-            return True, f"Settings reset to .env defaults!\nMode: {new_settings.telegram_api_mode.upper()}\nConnected as: @{me.username}"
+            return True, f"Settings reset to .env defaults!\nMode: {candidate_settings.telegram_api_mode.upper()}\nConnected as: @{me.username}"
+

@@ -258,12 +258,20 @@ def test_compose_yaml_external_network():
 
 
 def test_portainer_environment_configuration_in_compose():
-    """Verify compose files pass variables through environment block and do not use env_file."""
-    for filename in ("compose.yaml", "docker-compose.yml"):
-        path = Path(f"/home/farzad/metadataeditor/{filename}")
-        assert path.exists(), f"{filename} must exist"
-        content = path.read_text()
+    """Verify compose files are identical, pass variables through environment block and do not use env_file."""
+    compose_path = Path("/home/farzad/metadataeditor/compose.yaml")
+    docker_compose_path = Path("/home/farzad/metadataeditor/docker-compose.yml")
 
+    assert compose_path.exists(), "compose.yaml must exist"
+    assert docker_compose_path.exists(), "docker-compose.yml must exist"
+
+    compose_text = compose_path.read_text()
+    docker_compose_text = docker_compose_path.read_text()
+
+    # Must be 100% identical
+    assert compose_text == docker_compose_text, "compose.yaml and docker-compose.yml must be identical"
+
+    for filename, content in (("compose.yaml", compose_text), ("docker-compose.yml", docker_compose_text)):
         # Must NOT depend on env_file: .env (Portainer compatibility)
         assert "env_file:" not in content, f"{filename} should not have env_file"
         assert ".env" not in content, f"{filename} should not reference .env"
@@ -277,17 +285,29 @@ def test_portainer_environment_configuration_in_compose():
         assert "MAX_INPUT_MB: ${MAX_INPUT_MB" in content
         assert "MAX_OUTPUT_MB: ${MAX_OUTPUT_MB" in content
 
+        # Must include external telegram-bots network
+        assert "telegram-bots:" in content
+        assert "external: true" in content
+
 
 @pytest.mark.asyncio
 async def test_reset_to_env_defaults_rollback_on_getme_failure(test_repo: DatabaseRepository):
     """Transactional reset: If getMe fails during reset, previous configuration and DB overrides are retained."""
-    settings = Settings(bot_token="test_token", telegram_api_mode="local", telegram_api_base_url="http://local-stack:8081")
+    settings = Settings(
+        bot_token="test_token",
+        telegram_api_mode="local",
+        telegram_api_base_url="http://local-stack:8081",
+        max_input_mb=500,
+        max_output_mb=1000,
+    )
     mock_bot = MagicMock()
     mock_bot.session.api = TelegramAPIServer.from_base("http://local-stack:8081", is_local=False)
 
     # Put overrides in database
     await test_repo.set_system_setting("telegram_api_mode", "local")
     await test_repo.set_system_setting("telegram_api_base_url", "http://local-stack:8081")
+    await test_repo.set_system_setting("max_input_mb", "500")
+    await test_repo.set_system_setting("max_output_mb", "1000")
 
     # Simulate get_me failing during reset
     mock_bot.get_me = AsyncMock(side_effect=ConnectionError("Cannot reach official Telegram API"))
@@ -305,11 +325,19 @@ async def test_reset_to_env_defaults_rollback_on_getme_failure(test_repo: Databa
     assert mock_bot.session.api.is_local is False
     assert "http://local-stack:8081" in mock_bot.session.api.base
 
+    # In-memory settings must remain completely unchanged
+    assert settings.telegram_api_mode == "local"
+    assert settings.telegram_api_base_url == "http://local-stack:8081"
+    assert settings.max_input_mb == 500
+    assert settings.max_output_mb == 1000
+
     # DB overrides must NOT be cleared
     saved_mode = await test_repo.get_system_setting("telegram_api_mode")
     assert saved_mode == "local"
     saved_url = await test_repo.get_system_setting("telegram_api_base_url")
     assert saved_url == "http://local-stack:8081"
+    assert await test_repo.get_system_setting("max_input_mb") == "500"
+    assert await test_repo.get_system_setting("max_output_mb") == "1000"
 
     # Audit logs must NOT record a reset_settings entry on failure
     logs, total = await test_repo.get_audit_logs(limit=10)
@@ -326,8 +354,12 @@ async def test_reset_to_env_defaults_rollback_on_getme_failure(test_repo: Databa
 
     # DB overrides must now be cleared
     assert await test_repo.get_system_setting("telegram_api_mode") == ""
+    assert await test_repo.get_system_setting("telegram_api_base_url") == ""
+    assert await test_repo.get_system_setting("max_input_mb") == ""
+    assert await test_repo.get_system_setting("max_output_mb") == ""
 
     # Audit log must be recorded
     logs_after, _ = await test_repo.get_audit_logs(limit=10)
     reset_logs_after = [l for l in logs_after if l.action == "reset_settings"]
     assert len(reset_logs_after) == 1
+
