@@ -80,6 +80,10 @@ class Settings(BaseSettings):
         default="https://api.telegram.org",
         description="Telegram Bot API base URL (used when in 'local' mode, or official Telegram URL)",
     )
+    local_bot_api_data_dir: Path = Field(
+        default=Path("/var/lib/telegram-bot-api"),
+        description="Path to mounted Local Bot API storage directory",
+    )
 
     @property
     def is_local_mode(self) -> bool:

@@ -16,6 +16,8 @@ from app.bot.keyboards.admin_menu import (
     get_admin_broadcast_running_keyboard,
     get_admin_channels_keyboard,
     get_admin_dashboard_keyboard,
+    get_admin_message_detail_keyboard,
+    get_admin_messages_keyboard,
     get_admin_settings_keyboard,
     get_admin_whitelist_keyboard,
     get_file_size_preset_keyboard,
@@ -27,6 +29,7 @@ from app.database.repository import DatabaseRepository
 from app.services.api_mode_manager import ApiModeManager
 from app.services.broadcast_service import BroadcastService
 from app.services.job_manager import JobManager
+from app.services.message_service import MessageService
 from app.services.uptime import get_uptime_formatted
 
 logger = logging.getLogger(__name__)
@@ -1302,3 +1305,177 @@ async def callback_adm_set_reset(
     t, kb = render_admin_settings(settings, api_mode_manager=api_mode_manager)
     if callback.message:
         await callback.message.edit_text(t, reply_markup=kb, parse_mode="HTML")
+
+
+# --- Customizable Messages Management ---
+
+@router.callback_query(F.data == "adm_messages")
+async def callback_adm_messages(
+    callback: CallbackQuery,
+    settings: Settings,
+    repository: DatabaseRepository,
+    message_service: Optional[MessageService] = None,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+
+    if message_service is None:
+        message_service = MessageService(repository)
+
+    status_dict = await message_service.get_status_overview()
+    kb = get_admin_messages_keyboard(status_dict)
+    text = (
+        "💬 <b>Customizable Messages</b>\n\n"
+        "Select a message below to preview, customize, or reset to default:\n\n"
+        "• <b>Welcome Message</b>: Sent upon /start\n"
+        "• <b>Must-Join Prompt</b>: Shown when channels must be joined\n"
+        "• <b>Help Message</b>: Sent upon /help\n\n"
+        "<i>Supported Placeholders:</i>\n"
+        "<code>{first_name}</code>, <code>{username}</code>, <code>{user_id}</code>, <code>{bot_name}</code>"
+    )
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm_msg_view:"))
+async def callback_adm_msg_view(
+    callback: CallbackQuery,
+    settings: Settings,
+    repository: DatabaseRepository,
+    message_service: Optional[MessageService] = None,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+
+    msg_key = callback.data.split(":", 1)[1]
+    if message_service is None:
+        message_service = MessageService(repository)
+
+    try:
+        raw_text, is_custom = await message_service.get_raw_message(msg_key)
+        status_dict = await message_service.get_status_overview()
+        title = status_dict.get(msg_key, {}).get("title", msg_key)
+    except Exception as e:
+        await callback.answer(f"Error: {e}", show_alert=True)
+        return
+
+    status_tag = "⭐ <b>Customized</b>" if is_custom else "⚙️ <b>Default</b>"
+    kb = get_admin_message_detail_keyboard(msg_key, is_custom)
+    
+    text = (
+        f"💬 <b>{title}</b>\n"
+        f"Status: {status_tag}\n\n"
+        f"<b>Current Template:</b>\n"
+        f"<pre>{raw_text}</pre>\n\n"
+        f"<i>Supported Placeholders:</i>\n"
+        f"<code>{{first_name}}</code>, <code>{{username}}</code>, <code>{{user_id}}</code>, <code>{{bot_name}}</code>"
+    )
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm_msg_edit:"))
+async def callback_adm_msg_edit(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    repository: DatabaseRepository,
+    message_service: Optional[MessageService] = None,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+
+    msg_key = callback.data.split(":", 1)[1]
+    await state.set_state(AdminStates.waiting_for_custom_message)
+    await state.update_data(edit_msg_key=msg_key)
+
+    text = (
+        f"✏️ <b>Edit Message Template</b>\n\n"
+        f"Send the new text for <code>{msg_key}</code>.\n\n"
+        f"• Telegram HTML tags are supported (e.g. <code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;a href=\"...\"&gt;</code>).\n"
+        f"• Placeholders: <code>{{first_name}}</code>, <code>{{username}}</code>, <code>{{user_id}}</code>, <code>{{bot_name}}</code>\n\n"
+        f"<i>Send your text now or /cancel to abort.</i>"
+    )
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard("adm_messages"), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_for_custom_message)
+async def process_admin_custom_message(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    repository: DatabaseRepository,
+    message_service: Optional[MessageService] = None,
+) -> None:
+    if not is_admin_check(message, settings):
+        return
+
+    data = await state.get_data()
+    msg_key = data.get("edit_msg_key")
+    if not msg_key or not message.text:
+        await state.clear()
+        return
+
+    if message_service is None:
+        message_service = MessageService(repository)
+
+    ok, err = await message_service.set_message(
+        msg_key=msg_key,
+        text=message.text,
+        admin_id=message.from_user.id,
+    )
+    if not ok:
+        await message.reply(
+            f"❌ <b>Validation Error:</b>\n{err}\n\nPlease fix the markup and try again, or /cancel.",
+            parse_mode="HTML",
+        )
+        return
+
+    await state.clear()
+    await message.reply(
+        f"✅ <b>Message updated successfully!</b>\n\n"
+        f"Template for <code>{msg_key}</code> is now active.",
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("adm_msg_reset:"))
+async def callback_adm_msg_reset(
+    callback: CallbackQuery,
+    settings: Settings,
+    repository: DatabaseRepository,
+    message_service: Optional[MessageService] = None,
+) -> None:
+    if not is_admin_check(callback, settings):
+        await callback.answer("Unauthorized.", show_alert=True)
+        return
+
+    msg_key = callback.data.split(":", 1)[1]
+    if message_service is None:
+        message_service = MessageService(repository)
+
+    ok, msg = await message_service.reset_message(msg_key=msg_key, admin_id=callback.from_user.id)
+    await callback.answer("Reset to default!", show_alert=True)
+
+    raw_text, is_custom = await message_service.get_raw_message(msg_key)
+    status_dict = await message_service.get_status_overview()
+    title = status_dict.get(msg_key, {}).get("title", msg_key)
+    kb = get_admin_message_detail_keyboard(msg_key, is_custom)
+    text = (
+        f"💬 <b>{title}</b>\n"
+        f"Status: ⚙️ <b>Default</b>\n\n"
+        f"<b>Current Template:</b>\n"
+        f"<pre>{raw_text}</pre>\n\n"
+        f"<i>Supported Placeholders:</i>\n"
+        f"<code>{{first_name}}</code>, <code>{{username}}</code>, <code>{{user_id}}</code>, <code>{{bot_name}}</code>"
+    )
+    if callback.message:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+

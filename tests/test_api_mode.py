@@ -322,6 +322,10 @@ def test_portainer_environment_configuration_in_compose():
         assert "telegram-bots:" in content
         assert "external: true" in content
 
+        # Must mount shared telegram-bot-api-data volume read-only
+        assert "telegram-bot-api-data:/var/lib/telegram-bot-api:ro" in content
+        assert "name: telegram-bot-api-data" in content
+
 
 @pytest.mark.asyncio
 async def test_reset_to_env_defaults_clears_db_and_updates_restart_state(test_repo: DatabaseRepository):

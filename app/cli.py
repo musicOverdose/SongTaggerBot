@@ -10,6 +10,7 @@ from app.database.connection import Database
 from app.database.repository import DatabaseRepository
 from app.services.api_mode_manager import ApiModeManager
 from app.services.job_manager import JobManager
+from app.services.message_service import MessageService
 
 
 async def cmd_channels_list(repo: DatabaseRepository):
@@ -228,6 +229,42 @@ async def cmd_api_mode(repo: DatabaseRepository, settings, action: str, url: str
         return
 
 
+async def cmd_messages(repo: DatabaseRepository, action: str, key: str = None, text: str = None):
+    svc = MessageService(repo)
+    if action == "list":
+        status = await svc.get_status_overview()
+        print("=" * 60)
+        print("Customizable Messages Overview:")
+        print("-" * 60)
+        for k, v in status.items():
+            state = "CUSTOM" if v["is_custom"] else "DEFAULT"
+            print(f"[{state:7s}] {k:10s} - {v['title']} ({v['length']} chars)")
+            print(f"  Preview: {v['preview']}")
+        print("=" * 60)
+    elif action == "get":
+        if not key:
+            print("Error: Message key required (welcome, must_join, help)")
+            return
+        try:
+            raw_text, is_custom = await svc.get_raw_message(key)
+            print(f"--- Message: {key} ({'CUSTOM' if is_custom else 'DEFAULT'}) ---")
+            print(raw_text)
+        except Exception as e:
+            print(f"Error: {e}")
+    elif action == "set":
+        if not key or text is None:
+            print("Error: Both key and text are required for set")
+            return
+        ok, msg = await svc.set_message(key, text, admin_id=0)
+        print(f"Result: {msg}")
+    elif action == "reset":
+        if not key:
+            print("Error: Message key required for reset")
+            return
+        ok, msg = await svc.reset_message(key, admin_id=0)
+        print(f"Result: {msg}")
+
+
 async def cmd_settings_list(repo: DatabaseRepository, settings):
     db_mode = await repo.get_system_setting("telegram_api_mode", "")
     db_url = await repo.get_system_setting("telegram_api_base_url", "")
@@ -328,6 +365,18 @@ async def async_main():
     # stats parser
     subparsers.add_parser("stats", help="Show usage statistics")
 
+    # messages subparser
+    msg_parser = subparsers.add_parser("messages", help="Manage customizable bot messages")
+    msg_sub = msg_parser.add_subparsers(dest="action", required=True)
+    msg_sub.add_parser("list", help="List all customizable messages")
+    get_p = msg_sub.add_parser("get", help="Get a message template")
+    get_p.add_argument("key", choices=["welcome", "must_join", "help"], help="Message key")
+    set_p = msg_sub.add_parser("set", help="Set a custom message template")
+    set_p.add_argument("key", choices=["welcome", "must_join", "help"], help="Message key")
+    set_p.add_argument("text", help="New message text (HTML supported)")
+    res_p = msg_sub.add_parser("reset", help="Reset a message template to default")
+    res_p.add_argument("key", choices=["welcome", "must_join", "help"], help="Message key")
+
     # cleanup parser
     subparsers.add_parser("cleanup", help="Trigger cleanup of expired jobs")
 
@@ -363,6 +412,13 @@ async def async_main():
             await cmd_maintenance(repo, args.action)
         elif args.command == "api-mode":
             await cmd_api_mode(repo, settings, args.action, getattr(args, "url", None))
+        elif args.command == "messages":
+            await cmd_messages(
+                repo,
+                args.action,
+                key=getattr(args, "key", None),
+                text=getattr(args, "text", None),
+            )
         elif args.command == "settings":
             await cmd_settings_list(repo, settings)
         elif args.command == "backup":

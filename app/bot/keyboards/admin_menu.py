@@ -29,10 +29,13 @@ def get_admin_dashboard_keyboard(maintenance_mode: bool = False) -> InlineKeyboa
         ],
         [
             InlineKeyboardButton(text="⚙️ Settings", callback_data="adm_settings"),
-            InlineKeyboardButton(text="💾 Backup DB", callback_data="adm_backup"),
+            InlineKeyboardButton(text="💬 Messages", callback_data="adm_messages"),
         ],
         [
+            InlineKeyboardButton(text="💾 Backup DB", callback_data="adm_backup"),
             InlineKeyboardButton(text="🔄 Reload Config", callback_data="adm_reload"),
+        ],
+        [
             InlineKeyboardButton(text="❌ Close", callback_data="adm_close"),
         ],
     ]
@@ -206,3 +209,37 @@ def get_file_size_preset_keyboard(setting_type: str, is_local: bool) -> InlineKe
         InlineKeyboardButton(text="↩ Back to Settings", callback_data="adm_settings"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_admin_messages_keyboard(status_dict: dict) -> InlineKeyboardMarkup:
+    """Lists customizable messages with their custom/default status."""
+    buttons = []
+    for key, info in status_dict.items():
+        tag = "⭐ Custom" if info.get("is_custom") else "Default"
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{info.get('title', key)} ({tag})",
+                callback_data=f"adm_msg_view:{key}",
+            )
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="↩ Back to Admin", callback_data="adm_home")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_message_detail_keyboard(msg_key: str, is_custom: bool) -> InlineKeyboardMarkup:
+    """Action menu for a specific message (edit, reset, back)."""
+    action_row = [
+        InlineKeyboardButton(text="✏️ Edit Message", callback_data=f"adm_msg_edit:{msg_key}")
+    ]
+    if is_custom:
+        action_row.append(
+            InlineKeyboardButton(text="🔄 Reset to Default", callback_data=f"adm_msg_reset:{msg_key}")
+        )
+    buttons = [
+        action_row,
+        [InlineKeyboardButton(text="↩ Back to Messages", callback_data="adm_messages")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+

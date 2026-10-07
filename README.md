@@ -59,9 +59,11 @@ Maximum input size: 20 MB
 ```
 
 ### Centralized Local Bot API Server Support (Dual Mode)
-SongTaggerBot acts purely as an HTTP client connecting to our centralized, shared Telegram Local Bot API stack on the external Docker network `telegram-bots` at `http://telegram-bot-api:8081`.
+SongTaggerBot connects to our centralized, shared Telegram Local Bot API stack on the external Docker network `telegram-bots` at `http://telegram-bot-api:8081`.
 
-The bot container does not bundle or embed its own Local Bot API server. It communicates over standard HTTP (`is_local=False`), so it requires **no** shared filesystem and **no** Telegram API credentials (`TELEGRAM_API_ID` and `TELEGRAM_API_HASH` belong exclusively to the centralized server stack).
+- **API Session**: Normal HTTP connection (`is_local=False`) for Bot API methods.
+- **Shared Volume**: Telegram Local Bot API writes files to disk in its storage directory. SongTaggerBot mounts the external named volume `telegram-bot-api-data` **read-only** (`/var/lib/telegram-bot-api:ro`) to access files directly with zero network overhead.
+- **Security Boundary**: The bot strictly verifies that requested paths reside within `/var/lib/telegram-bot-api`, rejects path traversals, never mutates or deletes shared files, and accesses only files belonging to this bot's token.
 
 ```dotenv
 # Cloud Mode (Default: official Telegram servers)
@@ -71,6 +73,7 @@ TELEGRAM_API_BASE_URL=https://api.telegram.org
 # Local Mode (Centralized shared stack on VPS)
 TELEGRAM_API_MODE=local
 TELEGRAM_API_BASE_URL=http://telegram-bot-api:8081
+LOCAL_BOT_API_DATA_DIR=/var/lib/telegram-bot-api
 MAX_INPUT_MB=2000
 MAX_OUTPUT_MB=2000
 ```
@@ -228,6 +231,12 @@ docker compose run --rm bot cli api-mode local http://telegram-bot-api:8081
 # Settings: View all active configuration parameters & DB overrides
 docker compose run --rm bot cli settings
 
+# Customizable Messages: List, view, customize, and reset templates
+docker compose run --rm bot cli messages list
+docker compose run --rm bot cli messages get welcome
+docker compose run --rm bot cli messages set welcome "Welcome {first_name}! Send audio."
+docker compose run --rm bot cli messages reset welcome
+
 # Live Online SQLite Database Backup
 docker compose run --rm bot cli backup
 
@@ -254,6 +263,7 @@ Administrators (whose user IDs are listed in `ADMIN_IDS`) have access to a full 
     - Configure max input/output file sizes with quick presets or custom sizes.
     - Toggle **Technical Specs in preview** and **Send Cover Separately**.
     - Reset settings to `.env` defaults.
+  - 💬 **Custom Messages**: Interactive panel to preview, customize, and reset `/start` welcome, must-join, and `/help` message templates with Telegram HTML validation and placeholder substitution.
   - 🔄 **Toggle Maintenance Mode**: Temporarily pause new user jobs while allowing admin testing.
   - 💾 **Trigger Live Backup**: Execute consistent online SQLite database backups on-demand.
   - 📜 **Audit Logs Viewer**: Browse paginated administrative logs with timestamps, actions, and admin IDs.

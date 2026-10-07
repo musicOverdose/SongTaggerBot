@@ -9,7 +9,13 @@ from aiogram.types import CallbackQuery, FSInputFile, Message
 from app.audio.cover_manager import CoverManager
 from app.bot.keyboards.cover_menu import get_cover_confirm_keyboard, get_cover_menu_keyboard
 from app.bot.states.editor_states import EditorStates
+from app.config import Settings
 from app.database.repository import DatabaseRepository
+from app.services.file_acquisition import (
+    FileAcquisitionService,
+    LocalFileAccessError,
+    SecurityError,
+)
 from app.services.job_manager import JobManager
 
 logger = logging.getLogger(__name__)
@@ -123,6 +129,8 @@ async def process_cover_upload(
     message: Message,
     state: FSMContext,
     job_manager: JobManager,
+    settings: Settings = None,
+    file_acquisition: FileAcquisitionService = None,
 ) -> None:
     data = await state.get_data()
     job_uuid = data.get("job_uuid")
@@ -135,20 +143,35 @@ async def process_cover_upload(
         await state.clear()
         return
 
-    # Download image to temp location
+    # Acquire image to temp location
     bot = message.bot
     temp_img = job.dir_path / "temp_upload_cover"
 
     if message.photo:
-        # Highest resolution photo
-        photo = message.photo[-1]
-        file_info = await bot.get_file(photo.file_id)
-        await bot.download_file(file_info.file_path, destination=temp_img)
+        file_id = message.photo[-1].file_id
     elif message.document:
-        doc = message.document
-        file_info = await bot.get_file(doc.file_id)
-        await bot.download_file(file_info.file_path, destination=temp_img)
+        file_id = message.document.file_id
     else:
+        return
+
+    acquisition_svc = file_acquisition or FileAcquisitionService(settings or Settings())
+    try:
+        await acquisition_svc.acquire_file(bot, file_id, destination=temp_img)
+    except LocalFileAccessError as e:
+        logger.error(f"Local file acquisition error for cover: {e}")
+        await message.reply(
+            "❌ <b>Local Bot API storage is unavailable.</b>\n\n"
+            "Could not read cover image from the centralized volume.",
+            parse_mode="HTML",
+        )
+        return
+    except SecurityError as e:
+        logger.error(f"Security violation during cover acquisition: {e}")
+        await message.reply("❌ <b>Access Denied:</b> Invalid file path.", parse_mode="HTML")
+        return
+    except Exception as e:
+        logger.error(f"Failed to acquire cover image: {e}")
+        await message.reply("❌ <b>Failed to download image.</b> Please try again.", parse_mode="HTML")
         return
 
     # Validate image

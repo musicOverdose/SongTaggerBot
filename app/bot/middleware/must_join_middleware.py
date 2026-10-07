@@ -1,19 +1,25 @@
 """Middleware to enforce mandatory channel memberships."""
 
-from typing import Any, Awaitable, Callable, Dict
+from typing import Any, Awaitable, Callable, Dict, Optional
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from app.bot.keyboards.must_join_menu import get_must_join_keyboard
+from app.services.message_service import MessageService
 from app.services.must_join_service import MustJoinService
 
 
 class MustJoinMiddleware(BaseMiddleware):
     """Enforces must-join requirements before allowing audio processing."""
 
-    def __init__(self, must_join_service: MustJoinService):
+    def __init__(
+        self,
+        must_join_service: MustJoinService,
+        message_service: Optional[MessageService] = None,
+    ):
         super().__init__()
         self.must_join_service = must_join_service
+        self.message_service = message_service
 
     async def __call__(
         self,
@@ -66,11 +72,11 @@ class MustJoinMiddleware(BaseMiddleware):
 
         if not has_joined:
             kb = get_must_join_keyboard(missing)
-            text = (
-                "📢 <b>Channel Membership Required</b>\n\n"
-                "To use <b>SongTaggerBot</b>, please join our channel(s) below, "
-                "then press <b>I've joined</b>."
-            )
+            if self.message_service:
+                text = await self.message_service.get_must_join_message(user)
+            else:
+                from app.services.message_service import DEFAULT_MUST_JOIN_MESSAGE, MessageService as MS
+                text = MS.render_template(DEFAULT_MUST_JOIN_MESSAGE, user)
             if isinstance(event, Message):
                 await event.reply(text, reply_markup=kb, parse_mode="HTML")
             elif isinstance(event, CallbackQuery):

@@ -31,7 +31,9 @@ from app.database.connection import Database
 from app.database.repository import DatabaseRepository
 from app.services.api_mode_manager import ApiModeManager
 from app.services.broadcast_service import BroadcastService
+from app.services.file_acquisition import FileAcquisitionService
 from app.services.job_manager import JobManager
+from app.services.message_service import MessageService
 from app.services.must_join_service import MustJoinService
 from app.services.queue_manager import QueueManager
 from app.services.rate_limiter import RateLimiter
@@ -123,6 +125,8 @@ async def main():
 
     metadata_manager = MetadataManager()
     must_join_service = MustJoinService(repository)
+    message_service = MessageService(repository)
+    file_acquisition = FileAcquisitionService(settings)
     rate_limiter = RateLimiter(
         max_requests=settings.rate_limit_uploads_per_minute,
         window_seconds=60,
@@ -170,13 +174,15 @@ async def main():
     dp["queue_manager"] = queue_manager
     dp["metadata_manager"] = metadata_manager
     dp["must_join_service"] = must_join_service
+    dp["message_service"] = message_service
+    dp["file_acquisition"] = file_acquisition
     dp["rate_limiter"] = rate_limiter
     dp["broadcast_service"] = broadcast_service
     dp["api_mode_manager"] = api_mode_manager
 
     # Attach Must-Join verification middleware to messages & callback queries
-    dp.message.middleware(MustJoinMiddleware(must_join_service))
-    dp.callback_query.middleware(MustJoinMiddleware(must_join_service))
+    dp.message.middleware(MustJoinMiddleware(must_join_service, message_service))
+    dp.callback_query.middleware(MustJoinMiddleware(must_join_service, message_service))
 
     # Register Routers in logical priority order
     dp.include_router(common.router)

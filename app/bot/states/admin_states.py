@@ -12,3 +12,4 @@ class AdminStates(StatesGroup):
     waiting_for_local_url = State()
     waiting_for_custom_input_mb = State()
     waiting_for_custom_output_mb = State()
+    waiting_for_custom_message = State()

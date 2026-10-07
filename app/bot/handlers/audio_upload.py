@@ -23,6 +23,11 @@ from app.services.job_manager import (
     MaintenanceModeError,
     UserConcurrentJobLimitError,
 )
+from app.services.file_acquisition import (
+    FileAcquisitionService,
+    LocalFileAccessError,
+    SecurityError,
+)
 from app.services.queue_manager import QueueManager
 from app.services.rate_limiter import RateLimiter
 
@@ -41,6 +46,7 @@ async def handle_audio_upload(
     metadata_manager: MetadataManager,
     repository: DatabaseRepository,
     rate_limiter: RateLimiter,
+    file_acquisition: FileAcquisitionService = None,
 ) -> None:
     await state.clear()
 
@@ -125,10 +131,10 @@ async def handle_audio_upload(
 
     async def process_upload():
         try:
-            # Download file from Telegram
+            # Acquire file from Telegram (via direct Local Bot API volume copy or Cloud HTTP download)
             bot = message.bot
-            file_info = await bot.get_file(telegram_file.file_id)
-            await bot.download_file(file_info.file_path, destination=job.original_path)
+            acquisition_svc = file_acquisition or FileAcquisitionService(settings)
+            await acquisition_svc.acquire_file(bot, telegram_file.file_id, destination=job.original_path)
 
             # Copy to working file
             shutil.copy2(job.original_path, job.working_path)
@@ -190,6 +196,24 @@ async def handle_audio_upload(
             kb = get_preview_keyboard(job.uuid)
             await status_msg.edit_text(preview_text, reply_markup=kb, parse_mode="HTML")
 
+        except LocalFileAccessError as e:
+            logger.error(f"Local file acquisition error for job {job.uuid}: {e}")
+            job_manager.cleanup_job(job.uuid)
+            await repository.increment_stat("files_failed")
+            await status_msg.edit_text(
+                "❌ <b>Local Bot API storage is unavailable.</b>\n\n"
+                "The bot could not read the file from the centralized Local Bot API volume. "
+                "Please ensure the Docker volume <code>telegram-bot-api-data</code> is mounted.",
+                parse_mode="HTML",
+            )
+        except SecurityError as e:
+            logger.error(f"Security violation during file acquisition for job {job.uuid}: {e}")
+            job_manager.cleanup_job(job.uuid)
+            await repository.increment_stat("files_failed")
+            await status_msg.edit_text(
+                "❌ <b>Access Denied:</b> Invalid file path.",
+                parse_mode="HTML",
+            )
         except Exception as e:
             logger.error(f"Error processing audio upload for job {job.uuid}: {e}", exc_info=True)
             job_manager.cleanup_job(job.uuid)

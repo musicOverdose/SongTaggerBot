@@ -387,6 +387,19 @@ class DatabaseRepository:
         except Exception as e:
             logger.error(f"Error setting system setting {key}: {e}")
 
+    async def delete_system_setting(self, key: str) -> bool:
+        """Deletes a system setting row from the database (reverting to default)."""
+        conn = await self._get_conn()
+        try:
+            cursor = await conn.execute(
+                "DELETE FROM system_settings WHERE key = ?;", (key,)
+            )
+            await conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Error deleting system setting {key}: {e}")
+            return False
+
     async def is_maintenance_mode(self) -> bool:
         val = await self.get_system_setting("maintenance_mode", "false")
         return val.strip().lower() in ("true", "1", "yes")

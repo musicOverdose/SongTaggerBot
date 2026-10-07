@@ -1,5 +1,6 @@
 """Common bot command handlers (/start, /help, /cancel)."""
 
+from typing import Optional
 from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -7,45 +8,37 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot.keyboards.must_join_menu import get_must_join_keyboard
 from app.services.job_manager import JobManager
+from app.services.message_service import MessageService
 from app.services.must_join_service import MustJoinService
 
 router = Router(name="common_router")
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
+async def cmd_start(
+    message: Message,
+    state: FSMContext,
+    message_service: Optional[MessageService] = None,
+) -> None:
     await state.clear()
-    welcome_text = (
-        "🎵 <b>SongTaggerBot</b>\n"
-        "<i>by @MusicOverdose</i>\n\n"
-        "Welcome! Send any music or audio track to inspect and edit its tags.\n\n"
-        "<b>Supported Formats:</b>\n"
-        "• MP3, FLAC, M4A, MP4 Audio\n"
-        "• OGG, OPUS, WAV, AIFF, WMA\n\n"
-        "<b>Features:</b>\n"
-        "• Edit Title, Artist, Album, Year, Genre, Track & Disc numbers\n"
-        "• Advanced tags: Composer, Conductor, BPM, Grouping, ISRC\n"
-        "• Replace, extract, or remove embedded cover art\n"
-        "• Edit multiline embedded lyrics\n"
-        "• Trimming & cutting audio without quality loss\n"
-        "• Rename files or generate names from tags\n"
-        "• Undo any change at any time\n\n"
-        "Just send an audio file or document to begin!"
-    )
+    if message_service:
+        welcome_text = await message_service.get_welcome_message(message.from_user)
+    else:
+        from app.services.message_service import DEFAULT_WELCOME_MESSAGE, MessageService as MS
+        welcome_text = MS.render_template(DEFAULT_WELCOME_MESSAGE, message.from_user)
     await message.answer(welcome_text, parse_mode="HTML")
 
 
 @router.message(Command("help"))
-async def cmd_help(message: Message) -> None:
-    help_text = (
-        "📖 <b>How to use SongTaggerBot:</b>\n\n"
-        "1. <b>Upload:</b> Send an audio file directly into this chat.\n"
-        "2. <b>Inspect:</b> The bot displays the current tags, cover, and audio specs.\n"
-        "3. <b>Edit:</b> Use inline buttons to edit tags, update cover art, or edit lyrics.\n"
-        "4. <b>Undo:</b> Made a mistake? Press <b>↩ Undo</b> to revert changes.\n"
-        "5. <b>Finish:</b> Press <b>✅ Finish</b> to receive your updated audio file.\n"
-        "6. <b>Cancel:</b> Use /cancel anytime to discard changes and delete temporary files."
-    )
+async def cmd_help(
+    message: Message,
+    message_service: Optional[MessageService] = None,
+) -> None:
+    if message_service:
+        help_text = await message_service.get_help_message(message.from_user)
+    else:
+        from app.services.message_service import DEFAULT_HELP_MESSAGE, MessageService as MS
+        help_text = MS.render_template(DEFAULT_HELP_MESSAGE, message.from_user)
     await message.answer(help_text, parse_mode="HTML")
 
 
