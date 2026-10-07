@@ -43,14 +43,14 @@ def sample_user():
 async def test_message_service_returns_defaults_initially(msg_service: MessageService, sample_user: User):
     """When no customization exists in DB, MessageService returns built-in defaults."""
     welcome = await msg_service.get_welcome_message(sample_user)
-    assert "SongTaggerBot" in welcome
-    assert "Supported Formats:" in welcome
+    assert "Welcome Farzad!" in welcome
+    assert "Send an audio file" in welcome
 
     join = await msg_service.get_must_join_message(sample_user)
-    assert "Channel Membership Required" in join
+    assert "Please join our channel" in join
 
     help_msg = await msg_service.get_help_message(sample_user)
-    assert "How to use SongTaggerBot" in help_msg
+    assert "Send an audio file to view and edit its metadata tags." in help_msg
 
     overview = await msg_service.get_status_overview()
     assert overview["welcome"]["is_custom"] is False
@@ -126,7 +126,7 @@ async def test_custom_message_persistence_and_reset(msg_service: MessageService,
 
     # Returns default again
     res_after = await msg_service.get_help_message(sample_user)
-    assert "How to use SongTaggerBot" in res_after
+    assert "Send an audio file to view and edit its metadata tags." in res_after
 
     overview_after = await msg_service.get_status_overview()
     assert overview_after["help"]["is_custom"] is False

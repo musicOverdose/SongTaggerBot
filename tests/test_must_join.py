@@ -107,5 +107,5 @@ async def test_middleware_access_control(test_repo: DatabaseRepository):
     assert result is None
     assert handler_called is False
     mock_event.reply.assert_called_once()
-    assert "membership required" in mock_event.reply.call_args[0][0].lower()
+    assert "join our channel" in mock_event.reply.call_args[0][0].lower()
 

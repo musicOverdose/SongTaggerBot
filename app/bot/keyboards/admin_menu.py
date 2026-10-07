@@ -140,10 +140,11 @@ def get_admin_audit_logs_keyboard(page: int, total_pages: int) -> InlineKeyboard
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_admin_back_keyboard() -> InlineKeyboardMarkup:
-    """Simple back button to return to admin home."""
+def get_admin_back_keyboard(callback_data: str = "adm_home", text: Optional[str] = None) -> InlineKeyboardMarkup:
+    """Simple back button to return to admin home or specified menu."""
+    btn_text = text if text is not None else ("↩ Back to Admin" if callback_data == "adm_home" else "↩ Back")
     buttons = [
-        [InlineKeyboardButton(text="↩ Back to Admin", callback_data="adm_home")]
+        [InlineKeyboardButton(text=btn_text, callback_data=callback_data)]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
